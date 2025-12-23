@@ -1224,19 +1224,42 @@ ym=`bash ~/.acme.sh/acme.sh --list | tail -1 | awk '{print $1}'`
 echo $ym > /root/ygkkkca/ca.log
 fi
 rm -rf /etc/s-box/vm_ws_argo.txt /etc/s-box/vm_ws.txt /etc/s-box/vm_ws_tls.txt
-sbdnsip=$(cat /etc/s-box/sbdnsip.log)
-server_ip=$(cat /etc/s-box/server_ip.log)
-server_ipcl=$(cat /etc/s-box/server_ipcl.log)
-uuid=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].users[0].uuid')
-vl_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].listen_port')
-vl_name=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')
-public_key=$(cat /etc/s-box/public.key)
-short_id=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.reality.short_id[0]')
+sbdnsip=$(cat /etc/s-box/sbdnsip.log 2>/dev/null)
+server_ip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
+server_ipcl=$(cat /etc/s-box/server_ipcl.log 2>/dev/null)
+
+# 检查是否有多IP配置
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    # 多IP模式：从第一个IP读取基础信息
+    first_ip=$(head -n 1 /etc/s-box/ip_port_mapping.txt | cut -d'|' -f1)
+    first_vl_port=$(head -n 1 /etc/s-box/ip_port_mapping.txt | cut -d'|' -f2)
+    first_vm_port=$(head -n 1 /etc/s-box/ip_port_mapping.txt | cut -d'|' -f3)
+    first_hy2_port=$(head -n 1 /etc/s-box/ip_port_mapping.txt | cut -d'|' -f4)
+    first_tu_port=$(head -n 1 /etc/s-box/ip_port_mapping.txt | cut -d'|' -f5)
+    server_ip="$first_ip"
+    server_ipcl="$first_ip"
+    vl_port="$first_vl_port"
+    vm_port="$first_vm_port"
+    hy2_port="$first_hy2_port"
+    tu5_port="$first_tu_port"
+else
+    # 单IP模式：从配置文件读取
+    [[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 icanhazip.com -k 2>/dev/null || curl -s6m5 icanhazip.com -k 2>/dev/null)
+    [[ -z "$server_ipcl" ]] && server_ipcl="$server_ip"
+    vl_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].listen_port' 2>/dev/null)
+    vm_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].listen_port' 2>/dev/null)
+    hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[2].listen_port' 2>/dev/null)
+    tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[3].listen_port' 2>/dev/null)
+fi
+
+uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+vl_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.server_name' 2>/dev/null)
+public_key=$(cat /etc/s-box/public.key 2>/dev/null)
+short_id=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.reality.short_id[0]' 2>/dev/null)
 argo=$(cat /etc/s-box/argo.log 2>/dev/null | grep -a trycloudflare.com | awk 'NR==2{print}' | awk -F// '{print $2}' | awk '{print $1}')
-ws_path=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].transport.path')
-vm_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].listen_port')
-tls=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
-vm_name=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.server_name')
+ws_path=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].transport.path' 2>/dev/null | head -1)
+tls=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.enabled' 2>/dev/null)
+vm_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
 if [[ "$tls" = "false" ]]; then
 if [[ -f /etc/s-box/cfymjx.txt ]]; then
 vm_name=$(cat /etc/s-box/cfymjx.txt 2>/dev/null)
@@ -1315,68 +1338,140 @@ fi
 resvless(){
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-vl_link="vless://$uuid@$server_ip:$vl_port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$vl_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#vl-reality-$hostname"
-echo "$vl_link" > /etc/s-box/vl_reality.txt
-red "🚀【 vless-reality-vision 】节点信息如下：" && sleep 2
-echo
-echo "分享链接【v2ran(切换singbox内核)、nekobox、小火箭shadowrocket】"
-echo -e "${yellow}$vl_link${plain}"
-echo
-echo "二维码【v2ran(切换singbox内核)、nekobox、小火箭shadowrocket】"
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vl_reality.txt)"
+
+# 检查是否有多IP配置
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    red "🚀【 vless-reality-vision - 多IP节点 】" && sleep 1
+    echo
+    > /etc/s-box/vl_reality.txt
+    local ip_index=1
+    while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+        vl_link="vless://$uuid@$ip:$port_vl?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$vl_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#vl-reality-IP$ip_index-$ip"
+        echo "$vl_link" >> /etc/s-box/vl_reality.txt
+        green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        green "IP #$ip_index: $ip (端口: $port_vl)"
+        echo "分享链接："
+        echo -e "${yellow}$vl_link${plain}"
+        echo "二维码："
+        qrencode -o - -t ANSIUTF8 "$vl_link"
+        echo
+        ((ip_index++))
+    done < /etc/s-box/ip_port_mapping.txt
+    green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    green "所有节点链接已保存到：/etc/s-box/vl_reality.txt"
+else
+    # 单IP模式（原逻辑）
+    vl_link="vless://$uuid@$server_ip:$vl_port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$vl_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#vl-reality-$hostname"
+    echo "$vl_link" > /etc/s-box/vl_reality.txt
+    red "🚀【 vless-reality-vision 】节点信息如下：" && sleep 2
+    echo
+    echo "分享链接【v2ran(切换singbox内核)、nekobox、小火箭shadowrocket】"
+    echo -e "${yellow}$vl_link${plain}"
+    echo
+    echo "二维码【v2ran(切换singbox内核)、nekobox、小火箭shadowrocket】"
+    qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vl_reality.txt)"
+fi
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 }
 
 resvmess(){
-if [[ "$tls" = "false" ]]; then
-argopid
-if [[ -n $(ps -e | grep -w $ls 2>/dev/null) ]]; then
-echo
-white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-red "🚀【 vmess-ws(tls)+Argo 】临时节点信息如下(可选择3-8-3，自定义CDN优选地址)：" && sleep 2
-echo
-echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0)${plain}"
-echo
-echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argols.txt
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_argols.txt)"
-fi
-if [[ -n $(ps -e | grep -w $ym 2>/dev/null) ]]; then
-argogd=$(cat /etc/s-box/sbargoym.log 2>/dev/null)
-echo
-white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-red "🚀【 vmess-ws(tls)+Argo 】固定节点信息如下 (可选择3-8-3，自定义CDN优选地址)：" && sleep 2
-echo
-echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0)${plain}"
-echo
-echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argogd.txt
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_argogd.txt)"
-fi
-echo
-white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-red "🚀【 vmess-ws 】节点信息如下 (建议选择3-8-1，设置为CDN优选节点)：" && sleep 2
-echo
-echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)${plain}"
-echo
-echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo 'vmess://'$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws.txt
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws.txt)"
+# 检查是否有多IP配置
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    # 多IP模式
+    if [[ "$tls" = "false" ]]; then
+        red "🚀【 vmess-ws - 多IP节点 】" && sleep 1
+        echo
+        > /etc/s-box/vm_ws.txt
+        local ip_index=1
+        while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+            # 获取该IP对应的ws_path（从配置文件中读取）
+            ws_path_ip="${uuid}-vm-ip${ip_index}"
+            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"vm-ws-IP$ip_index-$ip","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+            echo "$vm_link" >> /etc/s-box/vm_ws.txt
+            green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            green "IP #$ip_index: $ip (端口: $port_vm)"
+            echo "分享链接："
+            echo -e "${yellow}$vm_link${plain}"
+            echo "二维码："
+            qrencode -o - -t ANSIUTF8 "$vm_link"
+            echo
+            ((ip_index++))
+        done < /etc/s-box/ip_port_mapping.txt
+        green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        green "所有节点链接已保存到：/etc/s-box/vm_ws.txt"
+    else
+        red "🚀【 vmess-ws-tls - 多IP节点 】" && sleep 1
+        echo
+        > /etc/s-box/vm_ws_tls.txt
+        local ip_index=1
+        while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+            ws_path_ip="${uuid}-vm-ip${ip_index}"
+            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"vm-ws-tls-IP$ip_index-$ip","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+            echo "$vm_link" >> /etc/s-box/vm_ws_tls.txt
+            green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            green "IP #$ip_index: $ip (端口: $port_vm)"
+            echo "分享链接："
+            echo -e "${yellow}$vm_link${plain}"
+            echo "二维码："
+            qrencode -o - -t ANSIUTF8 "$vm_link"
+            echo
+            ((ip_index++))
+        done < /etc/s-box/ip_port_mapping.txt
+        green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        green "所有节点链接已保存到：/etc/s-box/vm_ws_tls.txt"
+    fi
 else
-echo
-white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-red "🚀【 vmess-ws-tls 】节点信息如下 (建议选择3-8-1，设置为CDN优选节点)：" && sleep 2
-echo
-echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)${plain}"
-echo
-echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo 'vmess://'$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_tls.txt
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_tls.txt)"
+    # 单IP模式（原逻辑）
+    if [[ "$tls" = "false" ]]; then
+        argopid
+        if [[ -n $(ps -e | grep -w $ls 2>/dev/null) ]]; then
+            echo
+            white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+            red "🚀【 vmess-ws(tls)+Argo 】临时节点信息如下(可选择3-8-3，自定义CDN优选地址)：" && sleep 2
+            echo
+            echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+            echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0)${plain}"
+            echo
+            echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+            echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argols.txt
+            qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_argols.txt)"
+        fi
+        if [[ -n $(ps -e | grep -w $ym 2>/dev/null) ]]; then
+            argogd=$(cat /etc/s-box/sbargoym.log 2>/dev/null)
+            echo
+            white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+            red "🚀【 vmess-ws(tls)+Argo 】固定节点信息如下 (可选择3-8-3，自定义CDN优选地址)：" && sleep 2
+            echo
+            echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+            echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0)${plain}"
+            echo
+            echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+            echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argogd.txt
+            qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_argogd.txt)"
+        fi
+        echo
+        white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        red "🚀【 vmess-ws 】节点信息如下 (建议选择3-8-1，设置为CDN优选节点)：" && sleep 2
+        echo
+        echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+        echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)${plain}"
+        echo
+        echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+        echo 'vmess://'$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws.txt
+        qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws.txt)"
+    else
+        echo
+        white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        red "🚀【 vmess-ws-tls 】节点信息如下 (建议选择3-8-1，设置为CDN优选节点)：" && sleep 2
+        echo
+        echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+        echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)${plain}"
+        echo
+        echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+        echo 'vmess://'$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_tls.txt
+        qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_tls.txt)"
+    fi
 fi
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
@@ -1385,16 +1480,39 @@ echo
 reshy2(){
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-#hy2_link="hysteria2://$uuid@$sb_hy2_ip:$hy2_port?security=tls&alpn=h3&insecure=$ins_hy2&mport=$hyps&sni=$hy2_name#hy2-$hostname"
-hy2_link="hysteria2://$uuid@$sb_hy2_ip:$hy2_port?security=tls&alpn=h3&insecure=$ins_hy2&sni=$hy2_name#hy2-$hostname"
-echo "$hy2_link" > /etc/s-box/hy2.txt
-red "🚀【 Hysteria-2 】节点信息如下：" && sleep 2
-echo
-echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-echo -e "${yellow}$hy2_link${plain}"
-echo
-echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/hy2.txt)"
+
+# 检查是否有多IP配置
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    red "🚀【 Hysteria-2 - 多IP节点 】" && sleep 1
+    echo
+    > /etc/s-box/hy2.txt
+    local ip_index=1
+    while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+        hy2_link="hysteria2://$uuid@$ip:$port_hy2?security=tls&alpn=h3&insecure=$ins_hy2&sni=$hy2_name#hy2-IP$ip_index-$ip"
+        echo "$hy2_link" >> /etc/s-box/hy2.txt
+        green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        green "IP #$ip_index: $ip (端口: $port_hy2)"
+        echo "分享链接："
+        echo -e "${yellow}$hy2_link${plain}"
+        echo "二维码："
+        qrencode -o - -t ANSIUTF8 "$hy2_link"
+        echo
+        ((ip_index++))
+    done < /etc/s-box/ip_port_mapping.txt
+    green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    green "所有节点链接已保存到：/etc/s-box/hy2.txt"
+else
+    # 单IP模式（原逻辑）
+    hy2_link="hysteria2://$uuid@$sb_hy2_ip:$hy2_port?security=tls&alpn=h3&insecure=$ins_hy2&sni=$hy2_name#hy2-$hostname"
+    echo "$hy2_link" > /etc/s-box/hy2.txt
+    red "🚀【 Hysteria-2 】节点信息如下：" && sleep 2
+    echo
+    echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+    echo -e "${yellow}$hy2_link${plain}"
+    echo
+    echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
+    qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/hy2.txt)"
+fi
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 }
@@ -1402,15 +1520,39 @@ echo
 restu5(){
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-tuic5_link="tuic://$uuid:$uuid@$sb_tu5_ip:$tu5_port?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=$tu5_name&allow_insecure=$ins&allowInsecure=$ins#tu5-$hostname"
-echo "$tuic5_link" > /etc/s-box/tuic5.txt
-red "🚀【 Tuic-v5 】节点信息如下：" && sleep 2
-echo
-echo "分享链接【v2rayn、nekobox、小火箭shadowrocket】"
-echo -e "${yellow}$tuic5_link${plain}"
-echo
-echo "二维码【v2rayn、nekobox、小火箭shadowrocket】"
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/tuic5.txt)"
+
+# 检查是否有多IP配置
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    red "🚀【 Tuic-v5 - 多IP节点 】" && sleep 1
+    echo
+    > /etc/s-box/tuic5.txt
+    local ip_index=1
+    while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+        tuic5_link="tuic://$uuid:$uuid@$ip:$port_tu?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=$tu5_name&allow_insecure=$ins&allowInsecure=$ins#tu5-IP$ip_index-$ip"
+        echo "$tuic5_link" >> /etc/s-box/tuic5.txt
+        green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        green "IP #$ip_index: $ip (端口: $port_tu)"
+        echo "分享链接："
+        echo -e "${yellow}$tuic5_link${plain}"
+        echo "二维码："
+        qrencode -o - -t ANSIUTF8 "$tuic5_link"
+        echo
+        ((ip_index++))
+    done < /etc/s-box/ip_port_mapping.txt
+    green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    green "所有节点链接已保存到：/etc/s-box/tuic5.txt"
+else
+    # 单IP模式（原逻辑）
+    tuic5_link="tuic://$uuid:$uuid@$sb_tu5_ip:$tu5_port?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=$tu5_name&allow_insecure=$ins&allowInsecure=$ins#tu5-$hostname"
+    echo "$tuic5_link" > /etc/s-box/tuic5.txt
+    red "🚀【 Tuic-v5 】节点信息如下：" && sleep 2
+    echo
+    echo "分享链接【v2rayn、nekobox、小火箭shadowrocket】"
+    echo -e "${yellow}$tuic5_link${plain}"
+    echo
+    echo "二维码【v2rayn、nekobox、小火箭shadowrocket】"
+    qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/tuic5.txt)"
+fi
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 }
