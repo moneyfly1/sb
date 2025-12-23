@@ -1,6 +1,8 @@
 # Sing-box-yg 多IP支持增强版
 
-基于 [甬哥的 sing-box-yg 脚本](https://github.com/yonggekkk/sing-box-yg) 增强，新增**多IP节点自动配置功能**。
+基于 [yonggekkk/sing-box-yg](https://github.com/yonggekkk/sing-box-yg) 脚本增强开发，新增**多IP节点自动配置功能**。
+
+> **致谢**：本项目基于甬哥（yonggekkk）的优秀脚本增强，感谢原作者的贡献！
 
 ## ✨ 新增功能
 
@@ -202,12 +204,19 @@ ss -tunlp | grep <端口号>
 
 ## 🙏 致谢
 
-- 原项目：[甬哥的 sing-box-yg](https://github.com/yonggekkk/sing-box-yg)
-- Sing-box项目：[SagerNet/sing-box](https://github.com/SagerNet/sing-box)
+- **原项目**：[yonggekkk/sing-box-yg](https://github.com/yonggekkk/sing-box-yg) - 感谢甬哥（yonggekkk）的优秀脚本
+- **Sing-box项目**：[SagerNet/sing-box](https://github.com/SagerNet/sing-box)
+- **本项目**：[moneyfly1/sb](https://github.com/moneyfly1/sb) - 多IP增强版
 
 ## 📄 声明
 
-本项目基于 [甬哥的 sing-box-yg 脚本](https://github.com/yonggekkk/sing-box-yg) 增强，所有代码来源于Github社区与ChatGPT的整合。
+本项目基于 [yonggekkk/sing-box-yg](https://github.com/yonggekkk/sing-box-yg) 脚本增强开发，新增多IP节点自动配置功能。
+
+- **原作者**：甬哥（yonggekkk）
+- **增强开发**：moneyfly1
+- **主要增强**：多IP检测、自动端口分配、批量节点生成
+
+所有代码来源于Github社区与ChatGPT的整合。
 
 ---
 

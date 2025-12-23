@@ -4866,17 +4866,19 @@ rm /tmp/crontab.tmp
 
 lnsb(){
 rm -rf /usr/bin/sb
-curl -L -o /usr/bin/sb -# --retry 2 --insecure https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh
+curl -L -o /usr/bin/sb -# --retry 2 --insecure https://raw.githubusercontent.com/moneyfly1/sb/main/sb.sh
 chmod +x /usr/bin/sb
 }
 
 upsbyg(){
 if [[ ! -f '/usr/bin/sb' ]]; then
-red "未正常安装Sing-box-yg" && exit
+red "未正常安装脚本" && exit
 fi
+yellow "正在从 moneyfly1/sb 仓库更新脚本..."
 lnsb
-curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1 > /etc/s-box/v
-green "Sing-box-yg安装脚本升级成功" && sleep 5 && sb
+# 版本信息可以自定义，这里使用当前日期作为版本标识
+echo "v$(date +%Y.%m.%d)-multiip" > /etc/s-box/v 2>/dev/null || echo "multiip-enhanced" > /etc/s-box/v
+green "脚本升级成功（多IP增强版）" && sleep 3 && sb
 }
 
 lapre(){
@@ -4954,7 +4956,7 @@ iptables -t nat -F PREROUTING >/dev/null 2>&1
 netfilter-persistent save >/dev/null 2>&1
 service iptables save >/dev/null 2>&1
 green "Sing-box卸载完成！"
-blue "欢迎继续使用Sing-box-yg脚本：bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh)"
+blue "欢迎继续使用脚本：bash <(curl -Ls https://raw.githubusercontent.com/moneyfly1/sb/main/sb.sh)"
 echo
 }
 
@@ -5530,18 +5532,13 @@ white "-------------------------------------------------------------------------
 green " 0. 退出脚本"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 insV=$(cat /etc/s-box/v 2>/dev/null)
-latestV=$(curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1)
 if [ -f /etc/s-box/v ]; then
-if [ "$insV" = "$latestV" ]; then
-echo -e "当前 Sing-box-yg 脚本最新版：${bblue}${insV}${plain} (已安装)"
+echo -e "当前脚本版本：${bblue}${insV}${plain} (多IP增强版)"
+echo -e "项目地址：${bblue}https://github.com/moneyfly1/sb${plain}"
 else
-echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${insV}${plain}"
-echo -e "检测到最新 Sing-box-yg 脚本版本号：${yellow}${latestV}${plain} (可选择7进行更新)"
-echo -e "${yellow}$(curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version)${plain}"
-fi
-else
-echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${latestV}${plain}"
-yellow "未安装 Sing-box-yg 脚本！请先选择 1 安装"
+echo -e "当前脚本版本：${bblue}多IP增强版${plain}"
+echo -e "项目地址：${bblue}https://github.com/moneyfly1/sb${plain}"
+yellow "未安装脚本！请先选择 1 安装"
 fi
 
 lapre
