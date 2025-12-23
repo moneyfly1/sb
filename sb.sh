@@ -5565,18 +5565,132 @@ ipv=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.outbounds[0].doma
 inbounds_json=$(generate_multi_ip_config "$uuid" "$ym_vl_re" "$private_key" "$short_id" "$ym_vm_ws" "$tlsyn" "$certificatec_vmess_ws" "$certificatep_vmess_ws" "$certificatec_hy2" "$certificatep_hy2" "$certificatec_tuic" "$certificatep_tuic" "$ipv" "$base_port")
 echo "$inbounds_json" | jq . >/dev/null 2>&1 || { red "生成多IP配置失败，请重试"; return 1; }
 
+# 配置VPS路由：为每个IP配置独立的出站路由
+yellow "正在配置VPS路由，确保每个IP都能正常出站..."
+local ips=($(cat /etc/s-box/all_ips.txt))
+local ip_index=1
+
+# 获取默认网关和接口
+default_gw=$(ip route | grep default | awk '{print $3}' | head -1)
+default_if=$(ip route | grep default | awk '{print $5}' | head -1)
+[[ -z "$default_if" ]] && default_if=$(ip route | grep default | awk '{print $7}' | head -1)
+
+if [[ -z "$default_gw" || -z "$default_if" ]]; then
+    yellow "无法自动检测网关，将使用系统默认路由"
+else
+    for ip in "${ips[@]}"; do
+        # 为每个IP创建独立的路由表
+        local table_id=$((100 + ip_index))
+        
+        # 创建路由表（如果不存在）
+        if ! grep -q "^$table_id " /etc/iproute2/rt_tables 2>/dev/null; then
+            echo "$table_id ip${ip_index}" >> /etc/iproute2/rt_tables 2>/dev/null
+        fi
+        
+        # 配置路由规则：从该IP发出的流量使用独立路由表
+        ip rule add from $ip table $table_id 2>/dev/null
+        
+        # 在独立路由表中添加默认路由
+        ip route add default via $default_gw dev $default_if src $ip table $table_id 2>/dev/null
+        
+        # 添加本地路由
+        ip route add $ip dev $default_if table $table_id 2>/dev/null
+        
+        green "  ✓ 已为IP $ip 配置路由表 $table_id"
+        ((ip_index++))
+    done
+    
+    # 保存路由配置到文件，以便重启后恢复
+    ip rule show > /etc/s-box/ip_rules_backup.txt 2>/dev/null
+    ip route show table all > /etc/s-box/ip_routes_backup.txt 2>/dev/null
+    
+    green "路由配置完成"
+fi
+
+# 配置VPS路由和iptables：让每个IP的流量从对应IP出站
+yellow "正在配置VPS网络路由..."
+ip_index=1
+
+# 清除可能存在的旧规则
+for ip in "${ips[@]}"; do
+    iptables -t nat -D POSTROUTING -s $ip -j SNAT --to-source $ip 2>/dev/null
+    iptables -t nat -D OUTPUT -d 0.0.0.0/0 -p tcp -m tcp --sport $(head -n $ip_index /etc/s-box/ip_port_mapping.txt | tail -n 1 | cut -d'|' -f2) -j SNAT --to-source $ip 2>/dev/null
+done
+
+for ip in "${ips[@]}"; do
+    local ports=($(head -n $ip_index /etc/s-box/ip_port_mapping.txt | tail -n 1 | cut -d'|' -f2-5))
+    local port_vl=${ports[0]}
+    local port_vm=${ports[1]}
+    local port_hy2=${ports[2]}
+    local port_tu=${ports[3]}
+    
+    # 方法1：为从该IP地址发出的所有流量配置SNAT（确保源地址）
+    iptables -t nat -A POSTROUTING -s $ip -j SNAT --to-source $ip 2>/dev/null
+    
+    # 方法2：为特定端口的流量配置SNAT（更精确）
+    # TCP端口
+    iptables -t nat -A OUTPUT -p tcp --sport $port_vl -j SNAT --to-source $ip 2>/dev/null
+    iptables -t nat -A OUTPUT -p tcp --sport $port_vm -j SNAT --to-source $ip 2>/dev/null
+    # UDP端口
+    iptables -t nat -A OUTPUT -p udp --sport $port_hy2 -j SNAT --to-source $ip 2>/dev/null
+    iptables -t nat -A OUTPUT -p udp --sport $port_tu -j SNAT --to-source $ip 2>/dev/null
+    
+    # 方法3：配置策略路由（如果支持）
+    if [[ -n "$default_gw" && -n "$default_if" ]]; then
+        local table_id=$((100 + ip_index))
+        # 确保路由表存在
+        if ! grep -q "^$table_id " /etc/iproute2/rt_tables 2>/dev/null; then
+            echo "$table_id ip${ip_index}" >> /etc/iproute2/rt_tables 2>/dev/null
+        fi
+        # 添加路由规则
+        ip rule add from $ip table $table_id 2>/dev/null
+        ip route add default via $default_gw dev $default_if src $ip table $table_id 2>/dev/null
+        ip route add $ip dev $default_if table $table_id 2>/dev/null
+    fi
+    
+    green "  ✓ 已为IP $ip 配置出站路由（端口: $port_vl, $port_vm, $port_hy2, $port_tu）"
+    ((ip_index++))
+done
+
+# 保存iptables规则
+if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save >/dev/null 2>&1
+elif [[ -d /etc/iptables ]]; then
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null
+elif command -v iptables-save >/dev/null 2>&1; then
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null
+fi
+
+green "网络路由配置完成"
+
+# 生成outbounds配置：使用默认direct outbound（SNAT已处理源地址）
+local outbounds_json="[
+    {
+      \"type\": \"direct\",
+      \"tag\": \"direct\",
+      \"domain_strategy\": \"$ipv\"
+    }
+]"
+
 # 合并到现有配置或生成新配置
 if [[ -f /etc/s-box/sb.json ]]; then
-tmpfile=$(mktemp)
-sed 's://.*::g' /etc/s-box/sb.json | jq --argjson ib "$inbounds_json" '.inbounds=$ib' > "$tmpfile" && mv "$tmpfile" /etc/s-box/sb.json
+    tmpfile=$(mktemp)
+    # 读取现有outbounds和route，合并新的配置
+    sed 's://.*::g' /etc/s-box/sb.json | jq --argjson ib "$inbounds_json" --argjson ob "$outbounds_json" --argjson rules "$route_rules_json" '
+    .inbounds = $ib |
+    .outbounds = $ob |
+    .route.rules = (.route.rules // []) + $rules
+    ' > "$tmpfile" && mv "$tmpfile" /etc/s-box/sb.json
 else
-cat > /etc/s-box/sb.json <<EOF
+    cat > /etc/s-box/sb.json <<EOF
 {
   "log": {"disabled": false,"level": "info","timestamp": true},
   "inbounds": $inbounds_json,
-  "outbounds": [
-    {"type":"direct","tag":"direct","domain_strategy":"$ipv"}
-  ]
+  "outbounds": $outbounds_json,
+  "route": {
+    "rules": $route_rules_json
+  }
 }
 EOF
 fi
