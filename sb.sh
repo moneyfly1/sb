@@ -345,6 +345,7 @@ cat <<EOF
     "alpn": [
       "h3"
     ],
+    "server_name": "www.bing.com",
     "certificate_path": "${certificatec_hy2}",
     "key_path": "${certificatep_hy2}"
   }
@@ -368,6 +369,7 @@ cat <<EOF
     "alpn": [
       "h3"
     ],
+    "server_name": "www.bing.com",
     "certificate_path": "${certificatec_tuic}",
     "key_path": "${certificatep_tuic}"
   }
@@ -1349,7 +1351,22 @@ else
     tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[3].listen_port' 2>/dev/null)
 fi
 
+# 读取UUID（密码），优先从vless读取，如果失败则从hysteria2或tuic读取
 uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+if [[ -z "$uuid" || "$uuid" == "null" ]]; then
+    # 尝试从hysteria2读取
+    uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "hysteria2") | .users[0].password' 2>/dev/null | head -1)
+fi
+if [[ -z "$uuid" || "$uuid" == "null" ]]; then
+    # 尝试从tuic读取
+    uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "tuic") | .users[0].uuid' 2>/dev/null | head -1)
+fi
+if [[ -z "$uuid" || "$uuid" == "null" ]]; then
+    # 如果还是为空，生成新的UUID
+    command -v uuidgen >/dev/null 2>&1 && uuid=$(uuidgen) || uuid=$(cat /proc/sys/kernel/random/uuid)
+    yellow "警告: 无法从配置文件读取UUID，已生成新UUID: $uuid"
+fi
+
 vl_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.server_name' 2>/dev/null)
 public_key=$(cat /etc/s-box/public.key 2>/dev/null)
 short_id=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.reality.short_id[0]' 2>/dev/null)
@@ -1391,7 +1408,26 @@ vmadd_argo=$(cat /etc/s-box/cfvmadd_argo.txt 2>/dev/null)
 else
 vmadd_argo=www.visa.com.sg
 fi
-hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].listen_port')
+# 检查是否有多IP配置
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    # 多IP模式：从第一个hysteria2和tuic的inbound读取配置
+    # 查找第一个hysteria2类型的inbound
+    hy2_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[] | select(.type == "hysteria2") | .tls.key_path' 2>/dev/null | head -1)
+    # 查找第一个tuic类型的inbound
+    tu5_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[] | select(.type == "tuic") | .tls.key_path' 2>/dev/null | head -1)
+    # 读取server_name（如果存在）
+    hy2_server_name=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[] | select(.type == "hysteria2") | .tls.server_name' 2>/dev/null | head -1)
+    tu5_server_name=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[] | select(.type == "tuic") | .tls.server_name' 2>/dev/null | head -1)
+else
+    # 单IP模式：从固定索引读取
+    hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].listen_port' 2>/dev/null)
+    hy2_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].tls.key_path' 2>/dev/null)
+    hy2_server_name=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].tls.server_name' 2>/dev/null)
+    tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].listen_port' 2>/dev/null)
+    tu5_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].tls.key_path' 2>/dev/null)
+    tu5_server_name=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].tls.server_name' 2>/dev/null)
+fi
+
 hy2_ports=$(iptables -t nat -nL --line 2>/dev/null | grep -w "$hy2_port" | awk '{print $8}' | sed 's/dpts://; s/dpt://' | tr '\n' ',' | sed 's/,$//')
 if [[ -n $hy2_ports ]]; then
 hy2ports=$(echo $hy2_ports | sed 's/:/-/g')
@@ -1400,36 +1436,66 @@ else
 hyps=
 fi
 ym=$(cat /root/ygkkkca/ca.log 2>/dev/null)
-hy2_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].tls.key_path')
-if [[ "$hy2_sniname" = '/etc/s-box/private.key' ]]; then
-hy2_name=www.bing.com
-sb_hy2_ip=$server_ip
-cl_hy2_ip=$server_ipcl
-ins_hy2=1
-hy2_ins=true
+
+# 设置hysteria2的SNI名称（确保不为空）
+if [[ "$hy2_sniname" = '/etc/s-box/private.key' ]] || [[ "$hy2_sniname" = '/etc/s-box/key_hy2.key' ]] || [[ -z "$hy2_sniname" ]] || [[ "$hy2_sniname" == "null" ]]; then
+    # 使用自签证书，SNI为www.bing.com
+    if [[ -n "$hy2_server_name" && "$hy2_server_name" != "null" && "$hy2_server_name" != "" ]]; then
+        hy2_name="$hy2_server_name"
+    else
+        hy2_name="www.bing.com"
+    fi
+    sb_hy2_ip=$server_ip
+    cl_hy2_ip=$server_ipcl
+    ins_hy2=1
+    hy2_ins=true
 else
-hy2_name=$ym
-sb_hy2_ip=$ym
-cl_hy2_ip=$ym
-ins_hy2=0
-hy2_ins=false
+    # 使用域名证书
+    if [[ -n "$hy2_server_name" && "$hy2_server_name" != "null" && "$hy2_server_name" != "" ]]; then
+        hy2_name="$hy2_server_name"
+    elif [[ -n "$ym" && "$ym" != "" ]]; then
+        hy2_name=$ym
+    else
+        hy2_name="www.bing.com"
+    fi
+    sb_hy2_ip=${hy2_name:-$server_ip}
+    cl_hy2_ip=${hy2_name:-$server_ipcl}
+    ins_hy2=0
+    hy2_ins=false
 fi
-tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].listen_port')
-ym=$(cat /root/ygkkkca/ca.log 2>/dev/null)
-tu5_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].tls.key_path')
-if [[ "$tu5_sniname" = '/etc/s-box/private.key' ]]; then
-tu5_name=www.bing.com
-sb_tu5_ip=$server_ip
-cl_tu5_ip=$server_ipcl
-ins=1
-tu5_ins=true
+
+# 确保hy2_name不为空
+[[ -z "$hy2_name" || "$hy2_name" == "null" ]] && hy2_name="www.bing.com"
+
+# 设置tuic的SNI名称（确保不为空）
+if [[ "$tu5_sniname" = '/etc/s-box/private.key' ]] || [[ "$tu5_sniname" = '/etc/s-box/key_tuic.key' ]] || [[ -z "$tu5_sniname" ]] || [[ "$tu5_sniname" == "null" ]]; then
+    # 使用自签证书，SNI为www.bing.com
+    if [[ -n "$tu5_server_name" && "$tu5_server_name" != "null" && "$tu5_server_name" != "" ]]; then
+        tu5_name="$tu5_server_name"
+    else
+        tu5_name="www.bing.com"
+    fi
+    sb_tu5_ip=$server_ip
+    cl_tu5_ip=$server_ipcl
+    ins=1
+    tu5_ins=true
 else
-tu5_name=$ym
-sb_tu5_ip=$ym
-cl_tu5_ip=$ym
-ins=0
-tu5_ins=false
+    # 使用域名证书
+    if [[ -n "$tu5_server_name" && "$tu5_server_name" != "null" && "$tu5_server_name" != "" ]]; then
+        tu5_name="$tu5_server_name"
+    elif [[ -n "$ym" && "$ym" != "" ]]; then
+        tu5_name=$ym
+    else
+        tu5_name="www.bing.com"
+    fi
+    sb_tu5_ip=${tu5_name:-$server_ip}
+    cl_tu5_ip=${tu5_name:-$server_ipcl}
+    ins=0
+    tu5_ins=false
 fi
+
+# 确保tu5_name不为空
+[[ -z "$tu5_name" || "$tu5_name" == "null" ]] && tu5_name="www.bing.com"
 }
 
 resvless(){
@@ -1585,7 +1651,12 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     > /etc/s-box/hy2.txt
     local ip_index=1
     while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
-        hy2_link="hysteria2://$uuid@$ip:$port_hy2?security=tls&alpn=h3&insecure=$ins_hy2&sni=$hy2_name#hy2-IP$ip_index-$ip"
+        # 确保UUID和SNI不为空
+        [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "hysteria2") | .users[0].password' 2>/dev/null | head -1)
+        [[ -z "$hy2_name" || "$hy2_name" == "null" ]] && hy2_name="www.bing.com"
+        [[ -z "$ins_hy2" ]] && ins_hy2=1
+        
+        hy2_link="hysteria2://${uuid}@${ip}:${port_hy2}?security=tls&alpn=h3&insecure=${ins_hy2}&sni=${hy2_name}#hy2-IP${ip_index}-${ip}"
         echo "$hy2_link" >> /etc/s-box/hy2.txt
         green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         green "IP #$ip_index: $ip (端口: $port_hy2)"
@@ -1600,7 +1671,12 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     green "所有节点链接已保存到：/etc/s-box/hy2.txt"
 else
     # 单IP模式（原逻辑）
-    hy2_link="hysteria2://$uuid@$sb_hy2_ip:$hy2_port?security=tls&alpn=h3&insecure=$ins_hy2&sni=$hy2_name#hy2-$hostname"
+    # 确保UUID和SNI不为空
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[2].users[0].password' 2>/dev/null)
+    [[ -z "$hy2_name" || "$hy2_name" == "null" ]] && hy2_name="www.bing.com"
+    [[ -z "$ins_hy2" ]] && ins_hy2=1
+    
+    hy2_link="hysteria2://${uuid}@${sb_hy2_ip}:${hy2_port}?security=tls&alpn=h3&insecure=${ins_hy2}&sni=${hy2_name}#hy2-${hostname}"
     echo "$hy2_link" > /etc/s-box/hy2.txt
     red "🚀【 Hysteria-2 】节点信息如下：" && sleep 2
     echo
@@ -1625,7 +1701,12 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     > /etc/s-box/tuic5.txt
     local ip_index=1
     while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
-        tuic5_link="tuic://$uuid:$uuid@$ip:$port_tu?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=$tu5_name&allow_insecure=$ins&allowInsecure=$ins#tu5-IP$ip_index-$ip"
+        # 确保UUID和SNI不为空
+        [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "tuic") | .users[0].uuid' 2>/dev/null | head -1)
+        [[ -z "$tu5_name" || "$tu5_name" == "null" ]] && tu5_name="www.bing.com"
+        [[ -z "$ins" ]] && ins=1
+        
+        tuic5_link="tuic://${uuid}:${uuid}@${ip}:${port_tu}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${tu5_name}&allow_insecure=${ins}&allowInsecure=${ins}#tu5-IP${ip_index}-${ip}"
         echo "$tuic5_link" >> /etc/s-box/tuic5.txt
         green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         green "IP #$ip_index: $ip (端口: $port_tu)"
@@ -1640,7 +1721,12 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     green "所有节点链接已保存到：/etc/s-box/tuic5.txt"
 else
     # 单IP模式（原逻辑）
-    tuic5_link="tuic://$uuid:$uuid@$sb_tu5_ip:$tu5_port?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=$tu5_name&allow_insecure=$ins&allowInsecure=$ins#tu5-$hostname"
+    # 确保UUID和SNI不为空
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[3].users[0].uuid' 2>/dev/null)
+    [[ -z "$tu5_name" || "$tu5_name" == "null" ]] && tu5_name="www.bing.com"
+    [[ -z "$ins" ]] && ins=1
+    
+    tuic5_link="tuic://${uuid}:${uuid}@${sb_tu5_ip}:${tu5_port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${tu5_name}&allow_insecure=${ins}&allowInsecure=${ins}#tu5-${hostname}"
     echo "$tuic5_link" > /etc/s-box/tuic5.txt
     red "🚀【 Tuic-v5 】节点信息如下：" && sleep 2
     echo
@@ -1654,9 +1740,198 @@ white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 }
 
+# 生成多IP Clash配置的函数
+generate_multi_ip_clash_config(){
+    # 读取基础配置
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+    [[ -z "$vl_name" ]] && vl_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.server_name' 2>/dev/null)
+    [[ -z "$public_key" ]] && public_key=$(cat /etc/s-box/public.key 2>/dev/null)
+    [[ -z "$short_id" ]] && short_id=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.reality.short_id[0]' 2>/dev/null)
+    [[ -z "$ws_path" ]] && ws_path=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].transport.path' 2>/dev/null | head -1)
+    [[ -z "$vm_name" ]] && vm_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
+    [[ -z "$tls" ]] && tls=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.enabled' 2>/dev/null)
+    [[ "$tls" == "null" ]] && tls="false"
+    
+    local ip_index=1
+    local proxies_yaml=""
+    local outbounds_json=""
+    local select_list=""
+    local auto_list=""
+    local load_balance_list=""
+    
+    # 读取IP和端口映射
+    while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+        local vl_tag="vless-IP${ip_index}-${ip}"
+        local vm_tag="vmess-IP${ip_index}-${ip}"
+        local hy2_tag="hy2-IP${ip_index}-${ip}"
+        local tuic_tag="tuic5-IP${ip_index}-${ip}"
+        
+        select_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
+        auto_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
+        load_balance_list+="    - ${vl_tag}\n    - ${vm_tag}\n    - ${hy2_tag}\n    - ${tuic_tag}\n"
+        
+        # 生成YAML代理配置
+        proxies_yaml+="- name: ${vl_tag}\n  type: vless\n  server: ${ip}\n  port: ${port_vl}\n  uuid: ${uuid}\n  network: tcp\n  udp: true\n  tls: true\n  flow: xtls-rprx-vision\n  servername: ${vl_name}\n  reality-opts:\n    public-key: ${public_key}\n    short-id: ${short_id}\n  client-fingerprint: chrome\n\n"
+        proxies_yaml+="- name: ${vm_tag}\n  type: vmess\n  server: ${ip}\n  port: ${port_vm}\n  uuid: ${uuid}\n  alterId: 0\n  cipher: auto\n  udp: true\n  tls: ${tls}\n  network: ws\n  servername: ${vm_name}\n  ws-opts:\n    path: \"${ws_path}\"\n    headers:\n      Host: ${vm_name}\n\n"
+        proxies_yaml+="- name: ${hy2_tag}\n  type: hysteria2\n  server: ${ip}\n  port: ${port_hy2}\n  password: ${uuid}\n  alpn:\n    - h3\n  sni: ${hy2_name}\n  skip-cert-verify: ${hy2_ins}\n  fast-open: true\n\n"
+        proxies_yaml+="- name: ${tuic_tag}\n  server: ${ip}\n  port: ${port_tu}\n  type: tuic\n  uuid: ${uuid}\n  password: ${uuid}\n  alpn: [h3]\n  disable-sni: false\n  reduce-rtt: true\n  udp-relay-mode: native\n  congestion-controller: bbr\n  sni: ${tu5_name}\n  skip-cert-verify: ${tu5_ins}\n\n"
+        
+        # 生成JSON outbounds配置
+        [[ $ip_index -gt 1 ]] && outbounds_json+=",\n"
+        outbounds_json+="    {\"type\":\"vless\",\"tag\":\"${vl_tag}\",\"server\":\"${ip}\",\"server_port\":${port_vl},\"uuid\":\"${uuid}\",\"flow\":\"xtls-rprx-vision\",\"tls\":{\"enabled\":true,\"server_name\":\"${vl_name}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"},\"reality\":{\"enabled\":true,\"public_key\":\"${public_key}\",\"short_id\":\"${short_id}\"}}},\n"
+        outbounds_json+="    {\"server\":\"${ip}\",\"server_port\":${port_vm},\"tag\":\"${vm_tag}\",\"tls\":{\"enabled\":${tls},\"server_name\":\"${vm_name}\",\"insecure\":false,\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}},\"packet_encoding\":\"packetaddr\",\"transport\":{\"headers\":{\"Host\":[\"${vm_name}\"]},\"path\":\"${ws_path}\",\"type\":\"ws\"},\"type\":\"vmess\",\"security\":\"auto\",\"uuid\":\"${uuid}\"},\n"
+        outbounds_json+="    {\"type\":\"hysteria2\",\"tag\":\"${hy2_tag}\",\"server\":\"${ip}\",\"server_port\":${port_hy2},\"password\":\"${uuid}\",\"tls\":{\"enabled\":true,\"server_name\":\"${hy2_name}\",\"insecure\":${hy2_ins},\"alpn\":[\"h3\"]}},\n"
+        outbounds_json+="    {\"type\":\"tuic\",\"tag\":\"${tuic_tag}\",\"server\":\"${ip}\",\"server_port\":${port_tu},\"uuid\":\"${uuid}\",\"password\":\"${uuid}\",\"congestion_control\":\"bbr\",\"udp_relay_mode\":\"native\",\"udp_over_stream\":false,\"zero_rtt_handshake\":false,\"heartbeat\":\"10s\",\"tls\":{\"enabled\":true,\"server_name\":\"${tu5_name}\",\"insecure\":${tu5_ins},\"alpn\":[\"h3\"]}}"
+        
+        ((ip_index++))
+    done < /etc/s-box/ip_port_mapping.txt
+    
+    # 生成Sing-box客户端配置
+    cat > /etc/s-box/sing_box_client.json <<EOF
+{
+  "log": {"disabled": false, "level": "info", "timestamp": true},
+  "experimental": {
+    "clash_api": {"external_controller": "127.0.0.1:9090", "external_ui": "ui", "secret": "", "default_mode": "Rule"},
+    "cache_file": {"enabled": true, "path": "cache.db", "store_fakeip": true}
+  },
+  "dns": {
+    "servers": [
+      {"tag": "proxydns", "address": "${sbdnsip:-223.5.5.5}", "detour": "select"},
+      {"tag": "localdns", "address": "h3://223.5.5.5/dns-query", "detour": "direct"},
+      {"tag": "dns_fakeip", "address": "fakeip"}
+    ],
+    "rules": [
+      {"outbound": "any", "server": "localdns", "disable_cache": true},
+      {"clash_mode": "Global", "server": "proxydns"},
+      {"clash_mode": "Direct", "server": "localdns"},
+      {"rule_set": "geosite-cn", "server": "localdns"},
+      {"rule_set": "geosite-geolocation-!cn", "server": "proxydns"}
+    ],
+    "fakeip": {"enabled": true, "inet4_range": "198.18.0.0/15", "inet6_range": "fc00::/18"},
+    "independent_cache": true,
+    "final": "proxydns"
+  },
+  "inbounds": [{
+    "type": "tun",
+    "tag": "tun-in",
+    "address": ["172.19.0.1/30", "fd00::1/126"],
+    "auto_route": true,
+    "strict_route": true,
+    "sniff": true,
+    "sniff_override_destination": true,
+    "domain_strategy": "prefer_ipv4"
+  }],
+  "outbounds": [
+    {
+      "tag": "select",
+      "type": "selector",
+      "default": "auto",
+      "outbounds": ["auto", "DIRECT", $(echo -e "$select_list" | sed 's/,$//' | sed 's/^/        /')]
+    },
+    {
+      "tag": "auto",
+      "type": "urltest",
+      "outbounds": [$(echo -e "$auto_list" | sed 's/,$//' | sed 's/^/        /')],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "5m",
+      "tolerance": 50
+    },
+$(echo -e "$outbounds_json")
+    ,
+    {"type": "direct", "tag": "direct"},
+    {"type": "block", "tag": "block"}
+  ],
+  "route": {
+    "rules": [
+      {"clash_mode": "Direct", "outbound": "direct"},
+      {"clash_mode": "Global", "outbound": "select"},
+      {"rule_set": "geoip-cn", "outbound": "direct"},
+      {"rule_set": "geosite-cn", "outbound": "direct"},
+      {"ip_is_private": true, "outbound": "direct"},
+      {"rule_set": "geosite-geolocation-!cn", "outbound": "select"}
+    ]
+  },
+  "ntp": {"enabled": true, "server": "time.apple.com", "server_port": 123, "interval": "30m", "detour": "direct"}
+}
+EOF
+
+    # 生成Clash Meta配置
+    cat > /etc/s-box/clash_meta_client.yaml <<EOF
+port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+unified-delay: true
+global-client-fingerprint: chrome
+dns:
+  enable: false
+  listen: :53
+  ipv6: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  default-nameserver:
+    - 223.5.5.5
+    - 8.8.8.8
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fallback:
+    - https://1.0.0.1/dns-query
+    - tls://dns.google
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+
+proxies:
+$(echo -e "$proxies_yaml" | sed 's/^/  /')
+
+proxy-groups:
+- name: 负载均衡
+  type: load-balance
+  url: https://www.gstatic.com/generate_204
+  interval: 300
+  strategy: round-robin
+  proxies:
+$(echo -e "$load_balance_list" | sed 's/^/    /')
+
+- name: 自动选择
+  type: url-test
+  url: https://www.gstatic.com/generate_204
+  interval: 300
+  tolerance: 50
+  proxies:
+$(echo -e "$load_balance_list" | sed 's/^/    /')
+
+- name: 🌍选择代理节点
+  type: select
+  proxies:
+    - 负载均衡
+    - 自动选择
+    - DIRECT
+$(echo -e "$load_balance_list" | sed 's/^/    /')
+
+rules:
+  - GEOIP,LAN,DIRECT
+  - GEOIP,CN,DIRECT
+  - MATCH,🌍选择代理节点
+EOF
+}
+
 sb_client(){
-tls=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
+tls=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled' 2>/dev/null)
+[[ -z "$tls" || "$tls" == "null" ]] && tls="false"
 argopid
+
+# 检查是否有多IP配置
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    # 多IP模式：生成包含所有IP节点的配置
+    generate_multi_ip_clash_config
+    return 0
+fi
+
+# 单IP模式：原有逻辑
 if [[ -n $(ps -e | grep -w $ym 2>/dev/null) && -n $(ps -e | grep -w $ls 2>/dev/null) && "$tls" = "false" ]]; then
 cat > /etc/s-box/sing_box_client.json <<EOF
 {
