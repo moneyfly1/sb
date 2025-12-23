@@ -1318,9 +1318,22 @@ fi
 }
 
 result_vl_vm_hy_tu(){
+# 检查配置文件是否存在
+if [[ ! -f /etc/s-box/sb.json ]]; then
+    red "错误: 配置文件 /etc/s-box/sb.json 不存在"
+    return 1
+fi
+
+# 验证JSON格式
+if ! jq empty /etc/s-box/sb.json 2>/dev/null; then
+    red "错误: 配置文件 /etc/s-box/sb.json 格式错误"
+    yellow "请运行: cat /etc/s-box/sb.json | jq . 检查配置格式"
+    return 1
+fi
+
 if [[ -f /root/ygkkkca/cert.crt && -f /root/ygkkkca/private.key && -s /root/ygkkkca/cert.crt && -s /root/ygkkkca/private.key ]]; then
-ym=`bash ~/.acme.sh/acme.sh --list | tail -1 | awk '{print $1}'`
-echo $ym > /root/ygkkkca/ca.log
+    ym=$(bash ~/.acme.sh/acme.sh --list 2>/dev/null | tail -1 | awk '{print $1}')
+    [[ -n "$ym" ]] && echo "$ym" > /root/ygkkkca/ca.log
 fi
 rm -rf /etc/s-box/vm_ws_argo.txt /etc/s-box/vm_ws.txt /etc/s-box/vm_ws_tls.txt
 sbdnsip=$(cat /etc/s-box/sbdnsip.log 2>/dev/null)
@@ -1504,6 +1517,12 @@ fi
 
 # 确保tu5_name不为空
 [[ -z "$tu5_name" || "$tu5_name" == "null" ]] && tu5_name="www.bing.com"
+
+# 函数成功完成
+return 0
+
+# 函数成功完成，返回0
+return 0
 }
 
 resvless(){
