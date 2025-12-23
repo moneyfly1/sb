@@ -72,7 +72,7 @@ detect_all_ips() {
     local ips=()
     if command -v ip >/dev/null 2>&1; then
         while IFS= read -r line; do
-            ip=$(echo "$line" | grep -oP 'inet \\K[\\d.]+' | head -1)
+            ip=$(echo "$line" | grep -oE 'inet [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | awk '{print $2}' | head -1)
             if [[ -n "$ip" && "$ip" != "127.0.0.1" ]]; then
                 ips+=("$ip")
             fi
@@ -80,7 +80,7 @@ detect_all_ips() {
     fi
     if [[ ${#ips[@]} -eq 0 ]] && command -v ifconfig >/dev/null 2>&1; then
         while IFS= read -r line; do
-            ip=$(echo "$line" | grep -oP 'inet \\K[\\d.]+' | head -1)
+            ip=$(echo "$line" | grep -oE 'inet [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | awk '{print $2}' | head -1)
             if [[ -n "$ip" && "$ip" != "127.0.0.1" ]]; then
                 ips+=("$ip")
             fi
@@ -93,11 +93,8 @@ detect_all_ips() {
 
 test_ip_connectivity() {
     local ip=$1
-    if ping -c 1 -W 2 "$ip" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
+    timeout 2 ping -c 1 -W 1 "$ip" >/dev/null 2>&1 || return 1
+    return 0
 }
 
 get_ip_interface() {
@@ -294,17 +291,21 @@ show_all_ips_inline() {
         return 1
     fi
     green "检测到 $count 个IP地址："
+    echo
     local index=1
     for ip in "${ips[@]}"; do
-        local interface=$(get_ip_interface "$ip")
-        if test_ip_connectivity "$ip"; then
+        local interface=$(get_ip_interface "$ip" 2>/dev/null)
+        # 快速检测，超时1秒
+        if timeout 1 bash -c "ping -c 1 -W 1 $ip >/dev/null 2>&1" 2>/dev/null; then
             green "  [$index] $ip (接口: ${interface:-未知}) ✓ 可达"
         else
-            yellow "  [$index] $ip (接口: ${interface:-未知}) ✗ 不可达"
+            yellow "  [$index] $ip (接口: ${interface:-未知}) ✗ 不可达（仍可使用）"
         fi
         ((index++))
     done
     printf '%s\n' "${ips[@]}" > /etc/s-box/all_ips.txt
+    echo
+    return 0
 }
 # ================= 多IP工具函数结束 =================
 
@@ -5342,7 +5343,13 @@ echo
 
 command -v jq >/dev/null 2>&1 || { yellow "缺少 jq，正在安装…"; apt install -y jq >/dev/null 2>&1 || yum install -y jq >/dev/null 2>&1; }
 
-show_all_ips_inline || return 1
+yellow "正在检测IP地址..."
+if ! show_all_ips_inline; then
+    red "IP检测失败，请检查网络配置"
+    readp "按回车返回主菜单..." dummy
+    sb
+    return 1
+fi
 
 readp "基础端口(回车默认20000，每个IP递增1000)： " base_port
 [[ -z $base_port ]] && base_port=20000
@@ -5431,6 +5438,9 @@ cat /etc/s-box/ip_port_mapping.txt | while IFS='|' read -r ip p1 p2 p3 p4; do
 echo "  $ip -> Vless:$p1  Vmess:$p2  HY2:$p3  Tuic:$p4"
 done
 fi
+echo
+readp "按回车返回主菜单..." dummy
+sb
 }
 
 clear
