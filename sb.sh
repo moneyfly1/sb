@@ -5320,17 +5320,27 @@ fi
 
 sbsm(){
 echo
-green "关注甬哥YouTube频道：https://youtube.com/@ygkkk?sub_confirmation=1 了解最新代理协议与翻墙动态"
+green "=========================================="
+red "Sing-box-yg 多IP增强版使用说明"
+green "=========================================="
 echo
-blue "sing-box-yg脚本视频教程：https://www.youtube.com/playlist?list=PLMgly2AulGG_Affv6skQXWnVqw7XWiPwJ"
+yellow "本项目基于 yonggekkk/sing-box-yg 增强"
 echo
-blue "sing-box-yg脚本博客说明：http://ygkkk.blogspot.com/2023/10/sing-box-yg.html"
+green "新增功能："
+green "  ✅ 多IP节点自动配置"
+green "  ✅ 自动检测所有IP地址"
+green "  ✅ 智能端口分配"
+green "  ✅ 批量节点生成"
 echo
-blue "sing-box-yg脚本项目地址：https://github.com/yonggekkk/sing-box-yg"
+blue "项目地址：https://github.com/moneyfly1/sb"
 echo
-blue "推荐甬哥新品：ArgoSB一键无交互小钢炮脚本"
-blue "支持：AnyTLS、Any-reality、Vless-xhttp-reality、Vless-reality-vision、Shadowsocks-2022、Hysteria2、Tuic、Vmess-ws、Argo临时/固定隧道"
-blue "ArgoSB项目地址：https://github.com/yonggekkk/ArgoSB"
+yellow "原项目信息："
+blue "  原项目：https://github.com/yonggekkk/sing-box-yg"
+blue "  作者：甬哥 (yonggekkk)"
+blue "  博客：ygkkk.blogspot.com"
+blue "  YouTube：youtube.com/@ygkkk"
+echo
+yellow "感谢甬哥提供的优秀脚本！"
 echo
 }
 
@@ -5489,9 +5499,9 @@ echo -e "${bblue}     ░██        ░${plain}██    ░██ ██    
 echo -e "${bblue}     ░██ ${plain}        ░██    ░░██        ░██ ░██       ░${red}██ ░██       ░██ ░██ ${plain}  "
 echo -e "${bblue}     ░█${plain}█          ░██ ██ ██         ░██  ░░${red}██     ░██  ░░██     ░██  ░░██ ${plain}  "
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
-white "甬哥Github项目  ：github.com/yonggekkk"
-white "甬哥Blogger博客 ：ygkkk.blogspot.com"
-white "甬哥YouTube频道 ：www.youtube.com/@ygkkk"
+white "项目地址  ：github.com/moneyfly1/sb"
+white "基于      ：yonggekkk/sing-box-yg (感谢甬哥)"
+white "增强功能  ：多IP节点自动配置"
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
 white "Vless-reality-vision、Vmess-ws(tls)+Argo、Hysteria-2、Tuic-v5 四协议共存脚本"
 white "脚本快捷方式：sb"
@@ -5503,7 +5513,7 @@ green " 3. 变更配置 【双证书TLS/UUID路径/Argo/IP优先/TG通知/Warp/�
 green " 4. 更改主端口/添加多端口跳跃复用" 
 green " 5. 三通道域名分流"
 green " 6. 关闭/重启 Sing-box"   
-green " 7. 更新 Sing-box-yg 脚本"
+green " 7. 更新脚本（从原项目同步更新）"
 green " 8. 更新/切换/指定 Sing-box 内核版本"
 white "----------------------------------------------------------------------------------"
 green " 9. 刷新并查看节点 【Clash-Meta/SFA+SFI+SFW三合一配置/订阅链接/推送TG通知】"
@@ -5515,7 +5525,7 @@ green "14. 添加 WARP-plus-Socks5 代理模式 【本地Warp/多地区Psiphon-V
 green "15. 双栈VPS切换IPV4/IPV6配置输出"
 green "17. 多IP节点配置（内置多IP）"
 white "----------------------------------------------------------------------------------"
-green "16. Sing-box-yg脚本使用说明书"
+green "16. 脚本使用说明书"
 white "----------------------------------------------------------------------------------"
 green " 0. 退出脚本"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
