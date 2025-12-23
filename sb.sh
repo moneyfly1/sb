@@ -1827,7 +1827,10 @@ echo
 
 # 生成多IP Clash配置的函数
 generate_multi_ip_clash_config(){
-    # 读取基础配置
+    # 先调用result_vl_vm_hy_tu获取所有配置信息
+    result_vl_vm_hy_tu || return 1
+    
+    # 读取基础配置（如果result_vl_vm_hy_tu没有设置，则从配置文件读取）
     [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
     [[ -z "$vl_name" ]] && vl_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.server_name' 2>/dev/null)
     [[ -z "$public_key" ]] && public_key=$(cat /etc/s-box/public.key 2>/dev/null)
@@ -1836,6 +1839,12 @@ generate_multi_ip_clash_config(){
     [[ -z "$vm_name" ]] && vm_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
     [[ -z "$tls" ]] && tls=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.enabled' 2>/dev/null)
     [[ "$tls" == "null" ]] && tls="false"
+    
+    # 确保hy2和tuic的配置不为空
+    [[ -z "$hy2_name" || "$hy2_name" == "null" ]] && hy2_name="www.bing.com"
+    [[ -z "$tu5_name" || "$tu5_name" == "null" ]] && tu5_name="www.bing.com"
+    [[ -z "$hy2_ins" ]] && hy2_ins="true"
+    [[ -z "$tu5_ins" ]] && tu5_ins="true"
     
     local ip_index=1
     local proxies_yaml=""
@@ -1853,7 +1862,7 @@ generate_multi_ip_clash_config(){
         
         select_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
         auto_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
-        load_balance_list+="    - ${vl_tag}\n    - ${vm_tag}\n    - ${hy2_tag}\n    - ${tuic_tag}\n"
+        load_balance_list+="  - ${vl_tag}"$'\n'"  - ${vm_tag}"$'\n'"  - ${hy2_tag}"$'\n'"  - ${tuic_tag}"$'\n'
         
         # 生成YAML代理配置
         proxies_yaml+="- name: ${vl_tag}\n  type: vless\n  server: ${ip}\n  port: ${port_vl}\n  uuid: ${uuid}\n  network: tcp\n  udp: true\n  tls: true\n  flow: xtls-rprx-vision\n  servername: ${vl_name}\n  reality-opts:\n    public-key: ${public_key}\n    short-id: ${short_id}\n  client-fingerprint: chrome\n\n"
@@ -1979,7 +1988,7 @@ proxy-groups:
   interval: 300
   strategy: round-robin
   proxies:
-$(echo -e "$load_balance_list" | sed 's/^/    /')
+$(printf '%s' "$load_balance_list" | sed '/^$/d')
 
 - name: 自动选择
   type: url-test
@@ -1987,7 +1996,7 @@ $(echo -e "$load_balance_list" | sed 's/^/    /')
   interval: 300
   tolerance: 50
   proxies:
-$(echo -e "$load_balance_list" | sed 's/^/    /')
+$(printf '%s' "$load_balance_list" | sed '/^$/d')
 
 - name: 🌍选择代理节点
   type: select
@@ -1995,7 +2004,7 @@ $(echo -e "$load_balance_list" | sed 's/^/    /')
     - 负载均衡
     - 自动选择
     - DIRECT
-$(echo -e "$load_balance_list" | sed 's/^/    /')
+$(printf '%s' "$load_balance_list" | sed '/^$/d')
 
 rules:
   - GEOIP,LAN,DIRECT
