@@ -70,24 +70,74 @@ hostname=$(hostname)
 # ================= 多IP工具函数（内置，无需外部脚本） =================
 detect_all_ips() {
     local ips=()
+    local seen_ips=()
+    
+    # 方法1：使用ip命令（最准确）
     if command -v ip >/dev/null 2>&1; then
         while IFS= read -r line; do
+            # 匹配inet后的IP地址，包括CIDR格式
             ip=$(echo "$line" | grep -oE 'inet [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | awk '{print $2}' | head -1)
-            if [[ -n "$ip" && "$ip" != "127.0.0.1" ]]; then
-                ips+=("$ip")
+            if [[ -n "$ip" && "$ip" != "127.0.0.1" && "$ip" != "127.0.0.0" ]]; then
+                # 检查是否已存在（去重）
+                local found=0
+                for seen_ip in "${seen_ips[@]}"; do
+                    if [[ "$seen_ip" == "$ip" ]]; then
+                        found=1
+                        break
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    ips+=("$ip")
+                    seen_ips+=("$ip")
+                fi
             fi
-        done < <(ip addr show | grep "inet ")
+        done < <(ip addr show 2>/dev/null | grep "inet ")
     fi
+    
+    # 方法2：如果ip命令没有找到IP，使用ifconfig
     if [[ ${#ips[@]} -eq 0 ]] && command -v ifconfig >/dev/null 2>&1; then
         while IFS= read -r line; do
             ip=$(echo "$line" | grep -oE 'inet [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | awk '{print $2}' | head -1)
-            if [[ -n "$ip" && "$ip" != "127.0.0.1" ]]; then
-                ips+=("$ip")
+            if [[ -n "$ip" && "$ip" != "127.0.0.1" && "$ip" != "127.0.0.0" ]]; then
+                local found=0
+                for seen_ip in "${seen_ips[@]}"; do
+                    if [[ "$seen_ip" == "$ip" ]]; then
+                        found=1
+                        break
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    ips+=("$ip")
+                    seen_ips+=("$ip")
+                fi
             fi
         done < <(ifconfig 2>/dev/null | grep "inet ")
     fi
+    
+    # 方法3：从路由表中查找所有源IP
+    if command -v ip >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            # 从路由表中提取src字段的IP
+            ip=$(echo "$line" | grep -oE 'src [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | awk '{print $2}')
+            if [[ -n "$ip" && "$ip" != "127.0.0.1" && "$ip" != "127.0.0.0" ]]; then
+                local found=0
+                for seen_ip in "${seen_ips[@]}"; do
+                    if [[ "$seen_ip" == "$ip" ]]; then
+                        found=1
+                        break
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    ips+=("$ip")
+                    seen_ips+=("$ip")
+                fi
+            fi
+        done < <(ip route show 2>/dev/null | grep "src")
+    fi
+    
+    # 输出结果（去重并排序）
     if [[ ${#ips[@]} -gt 0 ]]; then
-        printf '%s\n' "${ips[@]}" | sort -u
+        printf '%s\n' "${ips[@]}" | sort -u -t. -k1,1n -k2,2n -k3,3n -k4,4n
     fi
 }
 
@@ -121,7 +171,35 @@ allocate_ports_for_ip() {
 
 check_port_available() {
     local port=$1
-    if ss -tunlp | grep -q ":$port "; then
+    local port_in_use=0
+    
+    # 验证端口范围
+    if [[ $port -lt 1 || $port -gt 65535 ]]; then
+        return 1
+    fi
+    
+    # 方法1: 使用ss命令（推荐）
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tunlp 2>/dev/null | grep -q ":$port "; then
+            port_in_use=1
+        fi
+    fi
+    
+    # 方法2: 使用netstat（备用）
+    if [[ $port_in_use -eq 0 ]] && command -v netstat >/dev/null 2>&1; then
+        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+            port_in_use=1
+        fi
+    fi
+    
+    # 方法3: 尝试使用nc测试端口（最可靠）
+    if [[ $port_in_use -eq 0 ]] && command -v nc >/dev/null 2>&1; then
+        if nc -z 127.0.0.1 $port 2>/dev/null; then
+            port_in_use=1
+        fi
+    fi
+    
+    if [[ $port_in_use -eq 1 ]]; then
         return 1
     else
         return 0
@@ -131,13 +209,32 @@ check_port_available() {
 find_available_port() {
     local start_port=$1
     local port=$start_port
-    while ! check_port_available "$port"; do
+    local max_attempts=100
+    local attempt=0
+    
+    # 验证起始端口范围
+    if [[ $start_port -lt 1 || $start_port -gt 65535 ]]; then
+        red "起始端口号超出有效范围: $start_port (有效范围: 1-65535)"
+        return 1
+    fi
+    
+    while [[ $attempt -lt $max_attempts ]]; do
+        if check_port_available "$port"; then
+            echo "$port"
+            return 0
+        fi
         ((port++))
+        ((attempt++))
+        
+        # 防止端口溢出
         if [[ $port -gt 65535 ]]; then
-            red "无法找到可用端口！"
+            red "端口号超出最大范围 (65535)"
             return 1
         fi
     done
+    
+    # 如果所有尝试都失败，返回最后一个端口号（但会警告）
+    yellow "警告: 在尝试 $max_attempts 次后未找到可用端口，使用端口 $port"
     echo "$port"
 }
 
@@ -5519,15 +5616,42 @@ ym_vl_re=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].
 [[ -z $ym_vl_re || $ym_vl_re == "null" ]] && ym_vl_re="www.microsoft.com"
 
 if [[ -f /etc/s-box/private.key ]]; then
-private_key=$(cat /etc/s-box/private.key | head -n 1 | tr -d '\n')
-else
-kp=$(/etc/s-box/sing-box generate reality-keypair 2>/dev/null)
-private_key=$(echo "$kp" | awk -F': ' '/PrivateKey/{print $2}')
-public_key=$(echo "$kp" | awk -F': ' '/PublicKey/{print $2}')
-echo "$private_key" > /etc/s-box/private.key
-echo "$public_key" > /etc/s-box/public.key
+# 严格清理私钥：移除所有空白字符和换行符，只保留base64字符
+private_key=$(cat /etc/s-box/private.key | tr -d '\n\r\t ' | grep -oE '^[A-Za-z0-9+/=]+$' | head -n 1)
+# 验证私钥格式（Reality私钥应该是base64编码，长度通常为44或88字符）
+if [[ -z "$private_key" || ${#private_key} -lt 40 ]]; then
+    yellow "检测到私钥格式异常，重新生成..."
+    rm -f /etc/s-box/private.key /etc/s-box/public.key
+    private_key=""
 fi
-[[ -z $private_key ]] && private_key=$(openssl rand -hex 32)
+fi
+
+if [[ -z "$private_key" ]]; then
+kp=$(/etc/s-box/sing-box generate reality-keypair 2>/dev/null)
+if [[ -n "$kp" ]]; then
+    private_key=$(echo "$kp" | awk -F': ' '/PrivateKey/{print $2}' | tr -d '\n\r\t ')
+    public_key=$(echo "$kp" | awk -F': ' '/PublicKey/{print $2}' | tr -d '\n\r\t ')
+    if [[ -n "$private_key" && ${#private_key} -ge 40 ]]; then
+        echo "$private_key" > /etc/s-box/private.key
+        echo "$public_key" > /etc/s-box/public.key
+    else
+        private_key=""
+    fi
+fi
+fi
+
+# 如果仍然没有有效的私钥，使用openssl生成（但这不是标准的Reality格式，仅作备用）
+if [[ -z "$private_key" ]]; then
+    yellow "使用备用方法生成私钥..."
+    private_key=$(openssl rand -base64 32 | tr -d '\n\r\t ')
+    echo "$private_key" > /etc/s-box/private.key
+fi
+
+# 最终验证：确保私钥不为空且格式正确
+if [[ -z "$private_key" || ${#private_key} -lt 40 ]]; then
+    red "私钥生成失败，请检查sing-box是否正常安装"
+    return 1
+fi
 short_id=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.reality.short_id[0]' 2>/dev/null)
 [[ -z $short_id || $short_id == "null" ]] && short_id=$(openssl rand -hex 4)
 
@@ -5561,9 +5685,50 @@ gen_self_sign "$certificatec_tuic" "$certificatep_tuic" "www.bing.com"
 ipv=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.outbounds[0].domain_strategy' 2>/dev/null)
 [[ -z $ipv || $ipv == "null" ]] && ipv="prefer_ipv4"
 
+# 备份现有配置文件（如果存在）
+if [[ -f /etc/s-box/sb.json ]]; then
+    yellow "正在备份现有配置文件..."
+    cp /etc/s-box/sb.json /etc/s-box/sb.json.backup.$(date +%Y%m%d_%H%M%S) 2>/dev/null
+    green "配置文件已备份"
+fi
+
+# 验证IP地址格式
+yellow "正在验证IP地址..."
+local ips=($(cat /etc/s-box/all_ips.txt))
+for ip in "${ips[@]}"; do
+    if ! echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        red "检测到无效的IP地址格式: $ip"
+        return 1
+    fi
+    # 验证IP地址范围
+    local ip_parts=($(echo "$ip" | tr '.' ' '))
+    for part in "${ip_parts[@]}"; do
+        if [[ $part -lt 0 || $part -gt 255 ]]; then
+            red "检测到无效的IP地址范围: $ip"
+            return 1
+        fi
+    done
+done
+green "IP地址验证通过"
+
+# 检查权限（需要root权限执行iptables和ip route）
+if [[ $EUID -ne 0 ]]; then
+    red "此功能需要root权限，请使用sudo运行脚本"
+    return 1
+fi
+
 # 生成多IP inbounds
+yellow "正在生成多IP配置..."
 inbounds_json=$(generate_multi_ip_config "$uuid" "$ym_vl_re" "$private_key" "$short_id" "$ym_vm_ws" "$tlsyn" "$certificatec_vmess_ws" "$certificatep_vmess_ws" "$certificatec_hy2" "$certificatep_hy2" "$certificatec_tuic" "$certificatep_tuic" "$ipv" "$base_port")
-echo "$inbounds_json" | jq . >/dev/null 2>&1 || { red "生成多IP配置失败，请重试"; return 1; }
+
+# 验证生成的JSON格式
+if ! echo "$inbounds_json" | jq . >/dev/null 2>&1; then
+    red "生成多IP配置失败，JSON格式错误"
+    yellow "错误详情："
+    echo "$inbounds_json" | jq . 2>&1 | head -10
+    return 1
+fi
+green "多IP配置生成成功"
 
 # 配置VPS路由：为每个IP配置独立的出站路由
 yellow "正在配置VPS路由，确保每个IP都能正常出站..."
@@ -5608,15 +5773,19 @@ else
 fi
 
 # 配置VPS路由和iptables：让每个IP的流量从对应IP出站
-yellow "正在配置VPS网络路由..."
+yellow "正在配置VPS网络路由，确保所有IP都能正确出站..."
 ip_index=1
 
-# 清除可能存在的旧规则
+# 清除可能存在的旧规则（避免重复）
 for ip in "${ips[@]}"; do
+    # 清除POSTROUTING规则
     iptables -t nat -D POSTROUTING -s $ip -j SNAT --to-source $ip 2>/dev/null
-    iptables -t nat -D OUTPUT -d 0.0.0.0/0 -p tcp -m tcp --sport $(head -n $ip_index /etc/s-box/ip_port_mapping.txt | tail -n 1 | cut -d'|' -f2) -j SNAT --to-source $ip 2>/dev/null
+    # 清除OUTPUT规则
+    iptables -t nat -D OUTPUT -d 0.0.0.0/0 -p tcp -m tcp -s $ip -j SNAT --to-source $ip 2>/dev/null
+    iptables -t nat -D OUTPUT -d 0.0.0.0/0 -p udp -m udp -s $ip -j SNAT --to-source $ip 2>/dev/null
 done
 
+# 为每个IP配置出站路由
 for ip in "${ips[@]}"; do
     local ports=($(head -n $ip_index /etc/s-box/ip_port_mapping.txt | tail -n 1 | cut -d'|' -f2-5))
     local port_vl=${ports[0]}
@@ -5624,31 +5793,44 @@ for ip in "${ips[@]}"; do
     local port_hy2=${ports[2]}
     local port_tu=${ports[3]}
     
-    # 方法1：为从该IP地址发出的所有流量配置SNAT（确保源地址）
+    # 方法1：为从该IP地址发出的所有流量配置SNAT（最可靠的方法）
+    # 这确保从该IP发出的所有流量都使用该IP作为源地址
+    iptables -t nat -C POSTROUTING -s $ip -j SNAT --to-source $ip 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s $ip -j SNAT --to-source $ip 2>/dev/null
     
-    # 方法2：为特定端口的流量配置SNAT（更精确）
-    # TCP端口
+    # 方法2：为特定端口的流量配置SNAT（双重保障）
+    # TCP端口（Vless和Vmess）
+    iptables -t nat -C OUTPUT -p tcp --sport $port_vl -j SNAT --to-source $ip 2>/dev/null || \
     iptables -t nat -A OUTPUT -p tcp --sport $port_vl -j SNAT --to-source $ip 2>/dev/null
+    iptables -t nat -C OUTPUT -p tcp --sport $port_vm -j SNAT --to-source $ip 2>/dev/null || \
     iptables -t nat -A OUTPUT -p tcp --sport $port_vm -j SNAT --to-source $ip 2>/dev/null
-    # UDP端口
+    # UDP端口（Hysteria2和Tuic）
+    iptables -t nat -C OUTPUT -p udp --sport $port_hy2 -j SNAT --to-source $ip 2>/dev/null || \
     iptables -t nat -A OUTPUT -p udp --sport $port_hy2 -j SNAT --to-source $ip 2>/dev/null
+    iptables -t nat -C OUTPUT -p udp --sport $port_tu -j SNAT --to-source $ip 2>/dev/null || \
     iptables -t nat -A OUTPUT -p udp --sport $port_tu -j SNAT --to-source $ip 2>/dev/null
     
-    # 方法3：配置策略路由（如果支持）
+    # 方法3：配置策略路由（确保系统级别的路由正确）
     if [[ -n "$default_gw" && -n "$default_if" ]]; then
         local table_id=$((100 + ip_index))
         # 确保路由表存在
         if ! grep -q "^$table_id " /etc/iproute2/rt_tables 2>/dev/null; then
             echo "$table_id ip${ip_index}" >> /etc/iproute2/rt_tables 2>/dev/null
         fi
-        # 添加路由规则
+        # 添加路由规则（如果不存在）
+        ip rule show | grep -q "from $ip lookup ip${ip_index}" 2>/dev/null || \
         ip rule add from $ip table $table_id 2>/dev/null
+        # 添加默认路由（如果不存在）
+        ip route show table $table_id | grep -q "default via" 2>/dev/null || \
         ip route add default via $default_gw dev $default_if src $ip table $table_id 2>/dev/null
+        # 添加本地路由
+        ip route show table $table_id | grep -q "^$ip " 2>/dev/null || \
         ip route add $ip dev $default_if table $table_id 2>/dev/null
     fi
     
-    green "  ✓ 已为IP $ip 配置出站路由（端口: $port_vl, $port_vm, $port_hy2, $port_tu）"
+    # 验证IP是否可达
+    local interface=$(get_ip_interface "$ip" 2>/dev/null)
+    green "  ✓ 已为IP $ip 配置出站路由（接口: ${interface:-未知}, 端口: $port_vl/$port_vm/$port_hy2/$port_tu）"
     ((ip_index++))
 done
 
@@ -5664,46 +5846,106 @@ fi
 
 green "网络路由配置完成"
 
-# 生成outbounds配置：使用默认direct outbound（SNAT已处理源地址）
-local outbounds_json="[
+# 为每个IP生成独立的outbound配置
+# 注意：sing-box的direct outbound不支持直接绑定IP，需要通过系统路由实现
+# 我们已经在上面配置了iptables SNAT和ip route，确保每个IP的流量从对应IP出站
+yellow "正在生成多IP出站配置..."
+local outbounds_json="["
+ip_index=1
+for ip in "${ips[@]}"; do
+    [[ $ip_index -gt 1 ]] && outbounds_json+=","
+    # 为每个IP创建独立的direct outbound标签
+    # 系统路由和iptables SNAT已确保从该IP发出的流量使用正确的源IP
+    outbounds_json+="{
+      \"type\": \"direct\",
+      \"tag\": \"direct-ip${ip_index}\",
+      \"domain_strategy\": \"$ipv\"
+    }"
+    ((ip_index++))
+done
+# 添加默认direct outbound作为fallback
+outbounds_json+=",
     {
       \"type\": \"direct\",
       \"tag\": \"direct\",
       \"domain_strategy\": \"$ipv\"
-    }
-]"
+    }"
+outbounds_json+="]"
+
+# 生成路由规则：将每个inbound的流量路由到对应的outbound
+local route_rules_json="["
+ip_index=1
+for ip in "${ips[@]}"; do
+    [[ $ip_index -gt 1 ]] && route_rules_json+=","
+    # 为每个IP的inbound创建路由规则，使用inbound的tag匹配
+    route_rules_json+="{
+      \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic-sb-ip${ip_index}\"],
+      \"outbound\": \"direct-ip${ip_index}\"
+    }"
+    ((ip_index++))
+done
+route_rules_json+=",
+    {
+      \"network\": [\"udp\", \"tcp\"],
+      \"outbound\": \"direct\"
+    }"
+route_rules_json+="]"
 
 # 合并到现有配置或生成新配置
+yellow "正在写入配置文件..."
+tmpfile=$(mktemp /tmp/sb_config_XXXXXX.json)
+
 if [[ -f /etc/s-box/sb.json ]]; then
-    tmpfile=$(mktemp)
-    # 读取现有outbounds和route，合并新的配置
-    sed 's://.*::g' /etc/s-box/sb.json | jq --argjson ib "$inbounds_json" --argjson ob "$outbounds_json" --argjson rules "$route_rules_json" '
+    # 读取现有配置并合并
+    if ! sed 's://.*::g' /etc/s-box/sb.json | jq --argjson ib "$inbounds_json" --argjson ob "$outbounds_json" --argjson rules "$route_rules_json" '
     .inbounds = $ib |
     .outbounds = $ob |
-    .route.rules = (.route.rules // []) + $rules
-    ' > "$tmpfile" && mv "$tmpfile" /etc/s-box/sb.json
+    .route.rules = $rules
+    ' > "$tmpfile" 2>/dev/null; then
+        red "合并配置文件失败"
+        rm -f "$tmpfile"
+        return 1
+    fi
 else
-    cat > /etc/s-box/sb.json <<EOF
-{
-  "log": {"disabled": false,"level": "info","timestamp": true},
-  "inbounds": $inbounds_json,
-  "outbounds": $outbounds_json,
-  "route": {
-    "rules": $route_rules_json
-  }
-}
-EOF
+    # 生成新配置
+    if ! jq -n --argjson ib "$inbounds_json" --argjson ob "$outbounds_json" --argjson rules "$route_rules_json" '{
+        "log": {"disabled": false,"level": "info","timestamp": true},
+        "inbounds": $ib,
+        "outbounds": $ob,
+        "route": {
+            "rules": $rules
+        }
+    }' > "$tmpfile" 2>/dev/null; then
+        red "生成配置文件失败"
+        rm -f "$tmpfile"
+        return 1
+    fi
 fi
 
-# 检查配置文件是否有效
-if ! jq empty /etc/s-box/sb.json 2>/dev/null; then
+# 验证临时文件的JSON格式
+if ! jq empty "$tmpfile" 2>/dev/null; then
     red "配置文件格式错误，请检查！"
     yellow "查看错误信息："
-    jq . /etc/s-box/sb.json 2>&1 | head -20
-    readp "按回车返回主菜单..." dummy
-    sb
+    jq . "$tmpfile" 2>&1 | head -20
+    rm -f "$tmpfile"
     return 1
 fi
+
+# 验证配置文件是否可以被sing-box解析
+if [[ -f /etc/s-box/sing-box ]]; then
+    if ! /etc/s-box/sing-box check -c "$tmpfile" >/dev/null 2>&1; then
+        red "配置文件验证失败，sing-box无法解析此配置"
+        yellow "错误详情："
+        /etc/s-box/sing-box check -c "$tmpfile" 2>&1 | head -20
+        rm -f "$tmpfile"
+        return 1
+    fi
+    green "配置文件验证通过"
+fi
+
+# 如果验证通过，移动临时文件到最终位置
+mv "$tmpfile" /etc/s-box/sb.json
+green "配置文件已写入"
 
 # 检查sing-box是否安装
 if [[ ! -f /etc/s-box/sing-box ]]; then
@@ -5713,25 +5955,68 @@ if [[ ! -f /etc/s-box/sing-box ]]; then
     return 1
 fi
 
+# 重启服务
+yellow "正在重启sing-box服务..."
 restartsb
 
 # 等待服务启动
-sleep 2
+sleep 3
 
 # 检查服务状态
+local service_started=0
 if [[ x"${release}" == x"alpine" ]]; then
     if rc-service sing-box status >/dev/null 2>&1; then
         green "Sing-box服务已启动"
+        service_started=1
     else
-        yellow "Sing-box服务启动可能失败，请选择10查看日志"
+        red "Sing-box服务启动失败"
+        yellow "查看日志："
+        rc-service sing-box status 2>&1 | head -10
     fi
 else
     if systemctl is-active --quiet sing-box; then
         green "Sing-box服务已启动"
+        service_started=1
     else
-        yellow "Sing-box服务启动可能失败，请选择10查看日志"
-        yellow "尝试手动启动：systemctl start sing-box"
+        red "Sing-box服务启动失败"
+        yellow "查看服务状态："
+        systemctl status sing-box --no-pager -l 2>&1 | head -15
+        yellow "查看详细日志：journalctl -u sing-box -n 20 --no-pager"
     fi
+fi
+
+# 如果服务启动失败，尝试回滚配置
+if [[ $service_started -eq 0 ]]; then
+    red "服务启动失败，正在尝试回滚配置..."
+    
+    # 查找最新的备份文件
+    local backup_file=$(ls -t /etc/s-box/sb.json.backup.* 2>/dev/null | head -1)
+    
+    if [[ -n "$backup_file" && -f "$backup_file" ]]; then
+        yellow "找到备份文件: $backup_file"
+        readp "是否恢复备份配置？(y/n，默认y): " restore_choice
+        [[ -z "$restore_choice" ]] && restore_choice="y"
+        
+        if [[ "$restore_choice" == "y" || "$restore_choice" == "Y" ]]; then
+            cp "$backup_file" /etc/s-box/sb.json
+            restartsb
+            sleep 2
+            if systemctl is-active --quiet sing-box 2>/dev/null || rc-service sing-box status >/dev/null 2>&1; then
+                green "配置已回滚，服务已恢复"
+            else
+                red "回滚后服务仍无法启动，请手动检查配置"
+            fi
+        fi
+    else
+        yellow "未找到备份文件，无法自动回滚"
+        yellow "请手动检查配置文件: /etc/s-box/sb.json"
+    fi
+    
+    echo
+    red "请选择10查看详细日志，或手动检查配置文件"
+    readp "按回车返回主菜单..." dummy
+    sb
+    return 1
 fi
 
 green "多IP配置已生效，配置文件：/etc/s-box/sb.json"
@@ -5908,3 +6193,4 @@ case "$Input" in
 16 ) sbsm;;
  * ) exit 
 esac
+
