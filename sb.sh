@@ -5427,7 +5427,44 @@ cat > /etc/s-box/sb.json <<EOF
 EOF
 fi
 
+# 检查配置文件是否有效
+if ! jq empty /etc/s-box/sb.json 2>/dev/null; then
+    red "配置文件格式错误，请检查！"
+    yellow "查看错误信息："
+    jq . /etc/s-box/sb.json 2>&1 | head -20
+    readp "按回车返回主菜单..." dummy
+    sb
+    return 1
+fi
+
+# 检查sing-box是否安装
+if [[ ! -f /etc/s-box/sing-box ]]; then
+    red "Sing-box未安装，请先选择1进行安装！"
+    readp "按回车返回主菜单..." dummy
+    sb
+    return 1
+fi
+
 restartsb
+
+# 等待服务启动
+sleep 2
+
+# 检查服务状态
+if [[ x"${release}" == x"alpine" ]]; then
+    if rc-service sing-box status >/dev/null 2>&1; then
+        green "Sing-box服务已启动"
+    else
+        yellow "Sing-box服务启动可能失败，请选择10查看日志"
+    fi
+else
+    if systemctl is-active --quiet sing-box; then
+        green "Sing-box服务已启动"
+    else
+        yellow "Sing-box服务启动可能失败，请选择10查看日志"
+        yellow "尝试手动启动：systemctl start sing-box"
+    fi
+fi
 
 green "多IP配置已生效，配置文件：/etc/s-box/sb.json"
 green "IP与端口映射保存在：/etc/s-box/ip_port_mapping.txt"
