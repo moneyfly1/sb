@@ -4725,7 +4725,7 @@ else
 res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=🚀【 Clash-meta 配置文件(2段) 】：支持Clash-meta相关客户端 "$'"'"'\n\n'"'"'"${message_text_m8}")
 res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=${message_text_m8_5}")
 fi
-res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=🚀【 四合一协议聚合订阅链接 】：支持nekobox "$'"'"'\n\n'"'"'"${message_text_m11}")
+res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=🚀【 多合一协议聚合订阅链接 】：支持nekobox "$'"'"'\n\n'"'"'"${message_text_m11}")
 
 if [ $? == 124 ];then
 echo TG_api请求超时,请检查网络是否重启完成并是否能够访问TG
@@ -5615,7 +5615,7 @@ v2sub=$(cat /etc/s-box/jhdy.txt 2>/dev/null)
 echo "$v2sub" > /etc/s-box/jh_sub.txt
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-red "🚀【 四合一聚合订阅 】节点信息如下：" && sleep 2
+red "🚀【 多合一聚合订阅 】节点信息如下：" && sleep 2
 echo
 echo "分享链接"
 if [[ -n "$baseurl" && "$baseurl" != "" ]]; then
@@ -5633,7 +5633,7 @@ sb_client
 clash_sb_share(){
 sbactive
 echo
-yellow "1：刷新并查看各协议分享链接、二维码、四合一聚合订阅"
+yellow "1：刷新并查看各协议分享链接、二维码、多合一聚合订阅"
 yellow "2：刷新并查看Clash-Meta、Sing-box客户端SFA/SFI/SFW三合一配置、Gitlab私有订阅链接"
 yellow "3：刷新并查看Hysteria2、Tuic5的V2rayN客户端自定义配置"
 yellow "4：推送最新节点配置信息(选项1+选项2)到Telegram通知"
@@ -6437,7 +6437,7 @@ white "项目地址  ：github.com/moneyfly1/sb"
 white "基于      ：yonggekkk/sing-box-yg (感谢甬哥)"
 white "增强功能  ：多IP节点自动配置"
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
-white "Vless-reality-vision、Vmess-ws(tls)+Argo、Hysteria-2、Tuic-v5 四协议共存脚本"
+white "Vless-reality-vision、Vmess-ws(tls)+Argo、Hysteria-2、Tuic-v5 多协议共存脚本"
 white "脚本快捷方式：sb"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 green " 1. 一键安装 Sing-box" 
