@@ -1345,10 +1345,18 @@ else
     # 单IP模式：从配置文件读取
     [[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 icanhazip.com -k 2>/dev/null || curl -s6m5 icanhazip.com -k 2>/dev/null)
     [[ -z "$server_ipcl" ]] && server_ipcl="$server_ip"
-    vl_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].listen_port' 2>/dev/null)
-    vm_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].listen_port' 2>/dev/null)
-    hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[2].listen_port' 2>/dev/null)
-    tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[3].listen_port' 2>/dev/null)
+    # 从配置文件读取端口（支持单IP和多IP配置结构）
+    vl_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "vless") | .listen_port' 2>/dev/null | head -1)
+    [[ -z "$vl_port" || "$vl_port" == "null" ]] && vl_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].listen_port' 2>/dev/null)
+    
+    vm_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "vmess") | .listen_port' 2>/dev/null | head -1)
+    [[ -z "$vm_port" || "$vm_port" == "null" ]] && vm_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].listen_port' 2>/dev/null)
+    
+    hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "hysteria2") | .listen_port' 2>/dev/null | head -1)
+    [[ -z "$hy2_port" || "$hy2_port" == "null" ]] && hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[2].listen_port' 2>/dev/null)
+    
+    tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "tuic") | .listen_port' 2>/dev/null | head -1)
+    [[ -z "$tu5_port" || "$tu5_port" == "null" ]] && tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[3].listen_port' 2>/dev/null)
 fi
 
 # 读取UUID（密码），优先从vless读取，如果失败则从hysteria2或tuic读取
@@ -1524,7 +1532,20 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     green "所有节点链接已保存到：/etc/s-box/vl_reality.txt"
 else
     # 单IP模式（原逻辑）
-    vl_link="vless://$uuid@$server_ip:$vl_port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$vl_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#vl-reality-$hostname"
+    # 确保所有变量不为空
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+    [[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 icanhazip.com -k 2>/dev/null || curl -s6m5 icanhazip.com -k 2>/dev/null)
+    [[ -z "$vl_port" ]] && vl_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].listen_port' 2>/dev/null)
+    [[ -z "$vl_name" ]] && vl_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.server_name' 2>/dev/null)
+    [[ -z "$public_key" ]] && public_key=$(cat /etc/s-box/public.key 2>/dev/null)
+    [[ -z "$short_id" ]] && short_id=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.reality.short_id[0]' 2>/dev/null)
+    
+    if [[ -z "$uuid" || -z "$server_ip" || -z "$vl_port" ]]; then
+        red "错误: 无法读取必要的配置信息（UUID、IP或端口）"
+        return 1
+    fi
+    
+    vl_link="vless://${uuid}@${server_ip}:${vl_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vl_name}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#vl-reality-${hostname}"
     echo "$vl_link" > /etc/s-box/vl_reality.txt
     red "🚀【 vless-reality-vision 】节点信息如下：" && sleep 2
     echo
@@ -1617,22 +1638,48 @@ else
         white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
         red "🚀【 vmess-ws 】节点信息如下 (建议选择3-8-1，设置为CDN优选节点)：" && sleep 2
         echo
+        # 确保所有变量不为空
+        [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+        [[ -z "$vmadd_are_local" ]] && vmadd_are_local="$server_ip"
+        [[ -z "$vm_name" ]] && vm_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
+        [[ -z "$ws_path" ]] && ws_path=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].transport.path' 2>/dev/null | head -1)
+        [[ -z "$vm_port" ]] && vm_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].listen_port' 2>/dev/null)
+        
+        if [[ -z "$uuid" || -z "$vmadd_are_local" || -z "$vm_port" ]]; then
+            red "错误: 无法读取Vmess配置信息"
+            return 1
+        fi
+        
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)${plain}"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+        echo -e "${yellow}${vm_link}${plain}"
+        echo "$vm_link" > /etc/s-box/vm_ws.txt
         echo
         echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        echo 'vmess://'$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws.txt
         qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws.txt)"
     else
         echo
         white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
         red "🚀【 vmess-ws-tls 】节点信息如下 (建议选择3-8-1，设置为CDN优选节点)：" && sleep 2
         echo
+        # 确保所有变量不为空
+        [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+        [[ -z "$vmadd_are_local" ]] && vmadd_are_local="$server_ip"
+        [[ -z "$vm_name" ]] && vm_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
+        [[ -z "$ws_path" ]] && ws_path=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].transport.path' 2>/dev/null | head -1)
+        [[ -z "$vm_port" ]] && vm_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].listen_port' 2>/dev/null)
+        
+        if [[ -z "$uuid" || -z "$vmadd_are_local" || -z "$vm_port" ]]; then
+            red "错误: 无法读取Vmess配置信息"
+            return 1
+        fi
+        
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)${plain}"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+        echo -e "${yellow}${vm_link}${plain}"
+        echo "$vm_link" > /etc/s-box/vm_ws_tls.txt
         echo
         echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        echo 'vmess://'$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_tls.txt
         qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_tls.txt)"
     fi
 fi
@@ -1671,10 +1718,20 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     green "所有节点链接已保存到：/etc/s-box/hy2.txt"
 else
     # 单IP模式（原逻辑）
-    # 确保UUID和SNI不为空
-    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[2].users[0].password' 2>/dev/null)
+    # 确保所有变量不为空
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "hysteria2") | .users[0].password' 2>/dev/null | head -1)
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+    [[ -z "$sb_hy2_ip" ]] && sb_hy2_ip="$server_ip"
+    [[ -z "$hy2_port" ]] && hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "hysteria2") | .listen_port' 2>/dev/null | head -1)
+    [[ -z "$hy2_port" ]] && hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[2].listen_port' 2>/dev/null)
     [[ -z "$hy2_name" || "$hy2_name" == "null" ]] && hy2_name="www.bing.com"
     [[ -z "$ins_hy2" ]] && ins_hy2=1
+    
+    if [[ -z "$uuid" || -z "$sb_hy2_ip" || -z "$hy2_port" ]]; then
+        red "错误: 无法读取Hysteria2配置信息"
+        yellow "UUID: ${uuid:-未设置}, IP: ${sb_hy2_ip:-未设置}, Port: ${hy2_port:-未设置}"
+        return 1
+    fi
     
     hy2_link="hysteria2://${uuid}@${sb_hy2_ip}:${hy2_port}?security=tls&alpn=h3&insecure=${ins_hy2}&sni=${hy2_name}#hy2-${hostname}"
     echo "$hy2_link" > /etc/s-box/hy2.txt
@@ -1721,10 +1778,19 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     green "所有节点链接已保存到：/etc/s-box/tuic5.txt"
 else
     # 单IP模式（原逻辑）
-    # 确保UUID和SNI不为空
-    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[3].users[0].uuid' 2>/dev/null)
+    # 确保所有变量不为空
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "tuic") | .users[0].uuid' 2>/dev/null | head -1)
+    [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+    [[ -z "$sb_tu5_ip" ]] && sb_tu5_ip="$server_ip"
+    [[ -z "$tu5_port" ]] && tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[] | select(.type == "tuic") | .listen_port' 2>/dev/null | head -1)
+    [[ -z "$tu5_port" ]] && tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[3].listen_port' 2>/dev/null)
     [[ -z "$tu5_name" || "$tu5_name" == "null" ]] && tu5_name="www.bing.com"
     [[ -z "$ins" ]] && ins=1
+    
+    if [[ -z "$uuid" || -z "$sb_tu5_ip" || -z "$tu5_port" ]]; then
+        red "错误: 无法读取Tuic配置信息"
+        return 1
+    fi
     
     tuic5_link="tuic://${uuid}:${uuid}@${sb_tu5_ip}:${tu5_port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${tu5_name}&allow_insecure=${ins}&allowInsecure=${ins}#tu5-${hostname}"
     echo "$tuic5_link" > /etc/s-box/tuic5.txt
@@ -5492,7 +5558,21 @@ fi
 
 sbshare(){
 rm -rf /etc/s-box/jhdy.txt /etc/s-box/vl_reality.txt /etc/s-box/vm_ws_argols.txt /etc/s-box/vm_ws_argogd.txt /etc/s-box/vm_ws.txt /etc/s-box/vm_ws_tls.txt /etc/s-box/hy2.txt /etc/s-box/tuic5.txt
-result_vl_vm_hy_tu && resvless && resvmess && reshy2 && restu5
+
+# 调用函数生成节点链接
+if ! result_vl_vm_hy_tu; then
+    red "错误: 读取配置失败，请检查 /etc/s-box/sb.json 文件"
+    return 1
+fi
+
+# 生成各协议节点链接（即使某个失败也继续）
+resvless || yellow "警告: Vless节点生成失败"
+resvmess || yellow "警告: Vmess节点生成失败"
+reshy2 || yellow "警告: Hysteria2节点生成失败"
+restu5 || yellow "警告: Tuic节点生成失败"
+
+# 合并所有节点链接
+> /etc/s-box/jhdy.txt
 cat /etc/s-box/vl_reality.txt 2>/dev/null >> /etc/s-box/jhdy.txt
 cat /etc/s-box/vm_ws_argols.txt 2>/dev/null >> /etc/s-box/jhdy.txt
 cat /etc/s-box/vm_ws_argogd.txt 2>/dev/null >> /etc/s-box/jhdy.txt
@@ -5500,6 +5580,17 @@ cat /etc/s-box/vm_ws.txt 2>/dev/null >> /etc/s-box/jhdy.txt
 cat /etc/s-box/vm_ws_tls.txt 2>/dev/null >> /etc/s-box/jhdy.txt
 cat /etc/s-box/hy2.txt 2>/dev/null >> /etc/s-box/jhdy.txt
 cat /etc/s-box/tuic5.txt 2>/dev/null >> /etc/s-box/jhdy.txt
+
+# 检查是否有节点链接
+if [[ ! -s /etc/s-box/jhdy.txt ]]; then
+    red "错误: 没有生成任何节点链接"
+    yellow "请检查以下内容："
+    yellow "1. 配置文件 /etc/s-box/sb.json 是否存在且格式正确"
+    yellow "2. 运行: cat /etc/s-box/sb.json | jq . 检查配置格式"
+    yellow "3. 运行: systemctl status sing-box 检查服务状态"
+    return 1
+fi
+
 baseurl=$(base64 -w 0 < /etc/s-box/jhdy.txt 2>/dev/null)
 v2sub=$(cat /etc/s-box/jhdy.txt 2>/dev/null)
 echo "$v2sub" > /etc/s-box/jh_sub.txt
@@ -5508,7 +5599,13 @@ white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 red "🚀【 四合一聚合订阅 】节点信息如下：" && sleep 2
 echo
 echo "分享链接"
-echo -e "${yellow}$baseurl${plain}"
+if [[ -n "$baseurl" && "$baseurl" != "" ]]; then
+    echo -e "${yellow}$baseurl${plain}"
+else
+    red "错误: 订阅链接生成失败"
+    yellow "节点链接内容："
+    cat /etc/s-box/jhdy.txt
+fi
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 sb_client
