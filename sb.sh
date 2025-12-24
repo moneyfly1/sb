@@ -1862,11 +1862,11 @@ generate_multi_ip_clash_config(){
         
         select_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
         auto_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
-        load_balance_list+="  - ${vl_tag}"$'\n'"  - ${vm_tag}"$'\n'"  - ${hy2_tag}"$'\n'"  - ${tuic_tag}"$'\n'
+        load_balance_list+="    - ${vl_tag}"$'\n'"    - ${vm_tag}"$'\n'"    - ${hy2_tag}"$'\n'"    - ${tuic_tag}"$'\n'
         
         # 生成YAML代理配置
         proxies_yaml+="- name: ${vl_tag}\n  type: vless\n  server: ${ip}\n  port: ${port_vl}\n  uuid: ${uuid}\n  network: tcp\n  udp: true\n  tls: true\n  flow: xtls-rprx-vision\n  servername: ${vl_name}\n  reality-opts:\n    public-key: ${public_key}\n    short-id: ${short_id}\n  client-fingerprint: chrome\n\n"
-        proxies_yaml+="- name: ${vm_tag}\n  type: vmess\n  server: ${ip}\n  port: ${port_vm}\n  uuid: ${uuid}\n  alterId: 0\n  cipher: auto\n  udp: true\n  tls: ${tls}\n  network: ws\n  servername: ${vm_name}\n  ws-opts:\n    path: \"${ws_path}\"\n    headers:\n      Host: ${vm_name}\n\n"
+        proxies_yaml+="- name: ${vm_tag}\n  type: vmess\n  server: ${ip}\n  port: ${port_vm}\n  uuid: ${uuid}\n  alterId: 0\n  cipher: auto\n  udp: true\n  tls: ${tls}\n  network: ws\n  servername: ${vm_name}\n  ws-opts:\n    path: \"${uuid}-vm-ip${ip_index}\"\n    headers:\n      Host: ${vm_name}\n\n"
         proxies_yaml+="- name: ${hy2_tag}\n  type: hysteria2\n  server: ${ip}\n  port: ${port_hy2}\n  password: ${uuid}\n  alpn:\n    - h3\n  sni: ${hy2_name}\n  skip-cert-verify: ${hy2_ins}\n  fast-open: true\n\n"
         proxies_yaml+="- name: ${tuic_tag}\n  server: ${ip}\n  port: ${port_tu}\n  type: tuic\n  uuid: ${uuid}\n  password: ${uuid}\n  alpn: [h3]\n  disable-sni: false\n  reduce-rtt: true\n  udp-relay-mode: native\n  congestion-controller: bbr\n  sni: ${tu5_name}\n  skip-cert-verify: ${tu5_ins}\n\n"
         
