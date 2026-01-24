@@ -264,11 +264,26 @@ generate_multi_ip_config() {
     > /etc/s-box/ip_port_mapping.txt
     local inbounds_json="["
     local ip_index=1
+    local assigned_ports=()
     for ip in "${ips[@]}"; do
-        local port_vl_re=$(find_available_port $(shuf -i 10000-65535 -n 1))
-        local port_vm_ws=$(find_available_port $(shuf -i 10000-65535 -n 1))
-        local port_hy2=$(find_available_port $(shuf -i 10000-65535 -n 1))
-        local port_tu=$(find_available_port $(shuf -i 10000-65535 -n 1))
+        # 内部函数：生成一个不与当前批次重复且系统可用的端口
+        get_unique_port() {
+            local p
+            while true; do
+                p=$(shuf -i 10000-65535 -n 1)
+                # 检查是否在本批次中已分配，以及系统是否占用
+                if ! [[ " ${assigned_ports[@]} " =~ " $p " ]] && check_port_available "$p"; then
+                    assigned_ports+=("$p")
+                    echo "$p"
+                    return 0
+                fi
+            done
+        }
+
+        local port_vl_re=$(get_unique_port)
+        local port_vm_ws=$(get_unique_port)
+        local port_hy2=$(get_unique_port)
+        local port_tu=$(get_unique_port)
         echo "$ip|$port_vl_re|$port_vm_ws|$port_hy2|$port_tu" >> /etc/s-box/ip_port_mapping.txt
         [[ $ip_index -gt 1 ]] && inbounds_json+=","
         inbounds_json+="$(
