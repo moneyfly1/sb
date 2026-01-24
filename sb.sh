@@ -293,7 +293,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "vless-sb-ip${ip_index}",
-  "listen": "${ip}",
+  "listen": "::",
   "listen_port": ${port_vl_re},
   "users": [
     {
@@ -320,7 +320,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "vmess-sb-ip${ip_index}",
-  "listen": "${ip}",
+  "listen": "::",
   "listen_port": ${port_vm_ws},
   "users": [
     {
@@ -346,7 +346,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "hy2-sb-ip${ip_index}",
-  "listen": "${ip}",
+  "listen": "::",
   "listen_port": ${port_hy2},
   "users": [
     {
@@ -369,7 +369,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "tuic5-sb-ip${ip_index}",
-  "listen": "${ip}",
+  "listen": "::",
   "listen_port": ${port_tu},
   "users": [
     {
@@ -1596,7 +1596,7 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
             
             # 获取该IP对应的ws_path（从配置文件中读取）
             ws_path_ip="${uuid}-vm-ip${ip_index}"
-            vm_link="vmess://$(echo '{"add":"'${ip}'","aid":"0","host":"'${vm_name}'","id":"'${uuid}'","net":"ws","path":"'${ws_path_ip}'","port":"'${port_vm}'","ps":"vm-ws-IP${ip_index}-${ip}","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+            vm_link="vmess://$(echo '{"add":"'${ip}'","aid":"0","host":"'${vm_name}'","id":"'${uuid}'","net":"ws","path":"'${ws_path_ip}'","port":"'${port_vm}'","ps":"vmess-ws-IP${ip_index}-${ip}","tls":"","type":"none","v":"2"}' | base64 -w 0)"
             echo "$vm_link" >> /etc/s-box/vm_ws.txt
             green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             green "IP #$ip_index: $ip (端口: $port_vm)"
@@ -1623,7 +1623,7 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
             [[ -z "$vm_name" ]] && vm_name="www.bing.com"
             
             ws_path_ip="${uuid}-vm-ip${ip_index}"
-            vm_link="vmess://$(echo '{"add":"'${ip}'","aid":"0","host":"'${vm_name}'","id":"'${uuid}'","net":"ws","path":"'${ws_path_ip}'","port":"'${port_vm}'","ps":"vm-ws-tls-IP${ip_index}-${ip}","tls":"tls","sni":"'${vm_name}'","type":"none","v":"2"}' | base64 -w 0)"
+            vm_link="vmess://$(echo '{"add":"'${ip}'","aid":"0","host":"'${vm_name}'","id":"'${uuid}'","net":"ws","path":"'${ws_path_ip}'","port":"'${port_vm}'","ps":"vmess-ws-tls-IP${ip_index}-${ip}","tls":"tls","sni":"'${vm_name}'","type":"none","v":"2"}' | base64 -w 0)"
             echo "$vm_link" >> /etc/s-box/vm_ws_tls.txt
             green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             green "IP #$ip_index: $ip (端口: $port_vm)"
@@ -1685,7 +1685,7 @@ else
         fi
         
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"vm-ws-$hostname","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"vmess-ws-$hostname","tls":"","type":"none","v":"2"}' | base64 -w 0)"
         echo -e "${yellow}${vm_link}${plain}"
         echo "$vm_link" > /etc/s-box/vm_ws.txt
         echo
@@ -1709,7 +1709,7 @@ else
         fi
         
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"vm-ws-tls-$hostname","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"vmess-ws-tls-$hostname","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
         echo -e "${yellow}${vm_link}${plain}"
         echo "$vm_link" > /etc/s-box/vm_ws_tls.txt
         echo
@@ -1875,7 +1875,7 @@ generate_multi_ip_clash_config(){
     # 读取IP和端口映射
     while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
         local vl_tag="vless-IP${ip_index}-${ip}"
-        local vm_tag="vmess-IP${ip_index}-${ip}"
+        local vm_tag="vmess-ws-IP${ip_index}-${ip}"
         local hy2_tag="hy2-IP${ip_index}-${ip}"
         local tuic_tag="tuic5-IP${ip_index}-${ip}"
         
@@ -1892,7 +1892,7 @@ generate_multi_ip_clash_config(){
         # 生成JSON outbounds配置
         [[ $ip_index -gt 1 ]] && outbounds_json+=",\n"
         outbounds_json+="    {\"type\":\"vless\",\"tag\":\"${vl_tag}\",\"server\":\"${ip}\",\"server_port\":${port_vl},\"uuid\":\"${uuid}\",\"flow\":\"xtls-rprx-vision\",\"tls\":{\"enabled\":true,\"server_name\":\"${vl_name}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"},\"reality\":{\"enabled\":true,\"public_key\":\"${public_key}\",\"short_id\":\"${short_id}\"}}},\n"
-        outbounds_json+="    {\"server\":\"${ip}\",\"server_port\":${port_vm},\"tag\":\"${vm_tag}\",\"tls\":{\"enabled\":${tls},\"server_name\":\"${vm_name}\",\"insecure\":false,\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}},\"packet_encoding\":\"packetaddr\",\"transport\":{\"headers\":{\"Host\":[\"${vm_name}\"]},\"path\":\"${ws_path}\",\"type\":\"ws\"},\"type\":\"vmess\",\"security\":\"auto\",\"uuid\":\"${uuid}\"},\n"
+        outbounds_json+="    {\"server\":\"${ip}\",\"server_port\":${port_vm},\"tag\":\"${vm_tag}\",\"tls\":{\"enabled\":${tls},\"server_name\":\"${vm_name}\",\"insecure\":false,\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}},\"packet_encoding\":\"packetaddr\",\"transport\":{\"headers\":{\"Host\":[\"${vm_name}\"]},\"path\":\"${uuid}-vm-ip${ip_index}\",\"type\":\"ws\"},\"type\":\"vmess\",\"security\":\"auto\",\"uuid\":\"${uuid}\"},\n"
         outbounds_json+="    {\"type\":\"hysteria2\",\"tag\":\"${hy2_tag}\",\"server\":\"${ip}\",\"server_port\":${port_hy2},\"password\":\"${uuid}\",\"tls\":{\"enabled\":true,\"server_name\":\"${hy2_name}\",\"insecure\":${hy2_ins},\"alpn\":[\"h3\"]}},\n"
         outbounds_json+="    {\"type\":\"tuic\",\"tag\":\"${tuic_tag}\",\"server\":\"${ip}\",\"server_port\":${port_tu},\"uuid\":\"${uuid}\",\"password\":\"${uuid}\",\"congestion_control\":\"bbr\",\"udp_relay_mode\":\"native\",\"udp_over_stream\":false,\"zero_rtt_handshake\":false,\"heartbeat\":\"10s\",\"tls\":{\"enabled\":true,\"server_name\":\"${tu5_name}\",\"insecure\":${tu5_ins},\"alpn\":[\"h3\"]}}"
         
@@ -4363,7 +4363,7 @@ if [[ ${#detected_ips[@]} -gt 1 ]]; then
         ip_index=1
         for ip in "${detected_ips[@]}"; do
             [[ $ip_index -gt 1 ]] && route_rules_json+=","
-            route_rules_json+="{ \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic-sb-ip${ip_index}\"], \"outbound\": \"direct-ip${ip_index}\" }"
+            route_rules_json+="{ \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic5-sb-ip${ip_index}\"], \"outbound\": \"direct-ip${ip_index}\" }"
             ((ip_index++))
         done
         route_rules_json+=", { \"network\": [\"udp\", \"tcp\"], \"outbound\": \"direct\" }]"
@@ -6421,7 +6421,7 @@ for ip in "${ips[@]}"; do
     [[ $ip_index -gt 1 ]] && route_rules_json+=","
     # 为每个IP的inbound创建路由规则，使用inbound的tag匹配
     route_rules_json+="{
-      \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic-sb-ip${ip_index}\"],
+      \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic5-sb-ip${ip_index}\"],
       \"outbound\": \"direct-ip${ip_index}\"
     }"
     ((ip_index++))
