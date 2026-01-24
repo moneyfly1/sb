@@ -265,11 +265,10 @@ generate_multi_ip_config() {
     local inbounds_json="["
     local ip_index=1
     for ip in "${ips[@]}"; do
-        local ports=($(allocate_ports_for_ip $ip_index $base_port))
-        local port_vl_re=$(find_available_port ${ports[0]})
-        local port_vm_ws=$(find_available_port ${ports[1]})
-        local port_hy2=$(find_available_port ${ports[2]})
-        local port_tu=$(find_available_port ${ports[3]})
+        local port_vl_re=$(find_available_port $(shuf -i 10000-65535 -n 1))
+        local port_vm_ws=$(find_available_port $(shuf -i 10000-65535 -n 1))
+        local port_hy2=$(find_available_port $(shuf -i 10000-65535 -n 1))
+        local port_tu=$(find_available_port $(shuf -i 10000-65535 -n 1))
         echo "$ip|$port_vl_re|$port_vm_ws|$port_hy2|$port_tu" >> /etc/s-box/ip_port_mapping.txt
         [[ $ip_index -gt 1 ]] && inbounds_json+=","
         inbounds_json+="$(
@@ -721,27 +720,12 @@ break
 fi
 done
 done
-port_vm_ws=${ports[0]}
-port_vl_re=${ports[1]}
-port_hy2=${ports[2]}
-port_tu=${ports[3]}
-if [[ $tlsyn == "true" ]]; then
-numbers=("2053" "2083" "2087" "2096" "8443")
-else
-numbers=("8080" "8880" "2052" "2082" "2086" "2095")
-fi
-port_vm_ws=${numbers[$RANDOM % ${#numbers[@]}]}
-until [[ -z $(ss -tunlp | grep -w tcp | awk '{print $5}' | sed 's/.*://g' | grep -w "$port_vm_ws") ]]
-do
-if [[ $tlsyn == "true" ]]; then
-numbers=("2053" "2083" "2087" "2096" "8443")
-else
-numbers=("8080" "8880" "2052" "2082" "2086" "2095")
-fi
-port_vm_ws=${numbers[$RANDOM % ${#numbers[@]}]}
-done
-echo
-blue "根据Vmess-ws协议是否启用TLS，随机指定支持CDN优选IP的标准端口：$port_vm_ws"
+    port_vm_ws=${ports[0]}
+    port_vl_re=${ports[1]}
+    port_hy2=${ports[2]}
+    port_tu=${ports[3]}
+    echo
+    blue "已自动生成各协议的随机端口"
 else
 vlport && vmport && hy2port && tu5port
 fi
@@ -1588,9 +1572,14 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
         > /etc/s-box/vm_ws.txt
         local ip_index=1
         while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+            # 确保变量不为空
+            [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+            [[ -z "$vm_name" ]] && vm_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
+            [[ -z "$vm_name" ]] && vm_name="www.bing.com"
+            
             # 获取该IP对应的ws_path（从配置文件中读取）
             ws_path_ip="${uuid}-vm-ip${ip_index}"
-            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"vm-ws-IP$ip_index-$ip","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+            vm_link="vmess://$(echo '{"add":"'${ip}'","aid":"0","host":"'${vm_name}'","id":"'${uuid}'","net":"ws","path":"'${ws_path_ip}'","port":"'${port_vm}'","ps":"vm-ws-IP${ip_index}-${ip}","tls":"","type":"none","v":"2"}' | base64 -w 0)"
             echo "$vm_link" >> /etc/s-box/vm_ws.txt
             green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             green "IP #$ip_index: $ip (端口: $port_vm)"
@@ -1609,8 +1598,13 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
         > /etc/s-box/vm_ws_tls.txt
         local ip_index=1
         while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
+            # 确保变量不为空
+            [[ -z "$uuid" ]] && uuid=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+            [[ -z "$vm_name" ]] && vm_name=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
+            [[ -z "$vm_name" ]] && vm_name="www.bing.com"
+            
             ws_path_ip="${uuid}-vm-ip${ip_index}"
-            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"vm-ws-tls-IP$ip_index-$ip","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+            vm_link="vmess://$(echo '{"add":"'${ip}'","aid":"0","host":"'${vm_name}'","id":"'${uuid}'","net":"ws","path":"'${ws_path_ip}'","port":"'${port_vm}'","ps":"vm-ws-tls-IP${ip_index}-${ip}","tls":"tls","sni":"'${vm_name}'","type":"none","v":"2"}' | base64 -w 0)"
             echo "$vm_link" >> /etc/s-box/vm_ws_tls.txt
             green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             green "IP #$ip_index: $ip (端口: $port_vm)"
@@ -1634,10 +1628,10 @@ else
             red "🚀【 vmess-ws(tls)+Argo 】临时节点信息如下(可选择3-8-3，自定义CDN优选地址)：" && sleep 2
             echo
             echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-            echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0)${plain}"
+            echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"vm-argo-$hostname","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0)${plain}"
             echo
             echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-            echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argols.txt
+            echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"vm-argo-$hostname","tls":"tls","sni":"'$argo'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argols.txt
             qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_argols.txt)"
         fi
         if [[ -n $(ps -e | grep -w $ym 2>/dev/null) ]]; then
@@ -1647,10 +1641,10 @@ else
             red "🚀【 vmess-ws(tls)+Argo 】固定节点信息如下 (可选择3-8-3，自定义CDN优选地址)：" && sleep 2
             echo
             echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-            echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0)${plain}"
+            echo -e "${yellow}vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"vm-argo-$hostname","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0)${plain}"
             echo
             echo "二维码【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-            echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argogd.txt
+            echo 'vmess://'$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"vm-argo-$hostname","tls":"tls","sni":"'$argogd'","type":"none","v":"2"}' | base64 -w 0) > /etc/s-box/vm_ws_argogd.txt
             qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/vm_ws_argogd.txt)"
         fi
         echo
@@ -1670,7 +1664,7 @@ else
         fi
         
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"vm-ws-$hostname","tls":"","type":"none","v":"2"}' | base64 -w 0)"
         echo -e "${yellow}${vm_link}${plain}"
         echo "$vm_link" > /etc/s-box/vm_ws.txt
         echo
@@ -1694,7 +1688,7 @@ else
         fi
         
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"vm-ws-tls-$hostname","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
         echo -e "${yellow}${vm_link}${plain}"
         echo "$vm_link" > /etc/s-box/vm_ws_tls.txt
         echo
