@@ -257,7 +257,14 @@ generate_multi_ip_config() {
     local ips=($(detect_all_ips))
     local ip_count=${#ips[@]}
     if [[ $ip_count -eq 0 ]]; then
-        red "未检测到任何IP地址！"
+        red "未检测到任何IP地址！" >&2
+        return 1
+    fi
+    
+    # 验证必需参数
+    if [[ -z "$uuid" || -z "$private_key" || -z "$short_id" ]]; then
+        red "generate_multi_ip_config: 缺少必需参数" >&2
+        yellow "UUID: ${uuid:-未设置}, Private Key: ${private_key:+已设置}${private_key:-未设置}, Short ID: ${short_id:-未设置}" >&2
         return 1
     fi
 
@@ -393,6 +400,22 @@ EOF
         ((ip_index++))
     done
     inbounds_json+="]"
+    
+    # 验证生成的JSON格式
+    if ! echo "$inbounds_json" | jq . >/dev/null 2>&1; then
+        red "generate_multi_ip_config: 生成的JSON格式无效" >&2
+        rm -f /etc/s-box/ip_port_mapping.txt
+        return 1
+    fi
+    
+    # 验证ip_port_mapping.txt文件是否包含所有IP
+    local mapping_count=$(wc -l < /etc/s-box/ip_port_mapping.txt 2>/dev/null || echo 0)
+    if [[ $mapping_count -ne $ip_count ]]; then
+        red "generate_multi_ip_config: IP映射文件不完整 (期望: $ip_count, 实际: $mapping_count)" >&2
+        rm -f /etc/s-box/ip_port_mapping.txt
+        return 1
+    fi
+    
     echo "$inbounds_json"
 }
 
@@ -4332,15 +4355,44 @@ if [[ ${#detected_ips[@]} -gt 1 ]]; then
     gen_self_sign "$certificatec_tuic" "$certificatep_tuic" "www.bing.com"
     
     # 读取 UUID 等关键信息
-    uuid=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].users[0].uuid')
-    ym_vl_re=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')
-    private_key=$(cat /etc/s-box/private.key 2>/dev/null)
-    short_id=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.reality.short_id[0]')
-    tlsyn=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
-    ipv=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.outbounds[0].domain_strategy')
+    uuid=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].users[0].uuid' 2>/dev/null)
+    [[ -z "$uuid" || "$uuid" == "null" ]] && uuid=$(/etc/s-box/sing-box generate uuid 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null)
+    
+    ym_vl_re=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name' 2>/dev/null)
+    [[ -z "$ym_vl_re" || "$ym_vl_re" == "null" ]] && ym_vl_re="apple.com"
+    
+    private_key=$(cat /etc/s-box/private.key 2>/dev/null | tr -d '\n\r\t ')
+    if [[ -z "$private_key" || ${#private_key} -lt 40 ]]; then
+        yellow "Reality私钥不存在或无效，正在生成新的..."
+        /etc/s-box/sing-box reality keygen > /etc/s-box/reality_keypair.txt 2>/dev/null
+        private_key=$(grep "PrivateKey" /etc/s-box/reality_keypair.txt | cut -d' ' -f2 | tr -d '\n\r\t ')
+        [[ -n "$private_key" ]] && echo "$private_key" > /etc/s-box/private.key
+    fi
+    
+    short_id=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.reality.short_id[0]' 2>/dev/null)
+    [[ -z "$short_id" || "$short_id" == "null" ]] && short_id=$(openssl rand -hex 8 | cut -c1-8)
+    
+    tlsyn=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled' 2>/dev/null)
+    [[ -z "$tlsyn" || "$tlsyn" == "null" ]] && tlsyn="false"
+    
+    ipv=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.outbounds[0].domain_strategy' 2>/dev/null)
+    [[ -z "$ipv" || "$ipv" == "null" ]] && ipv="prefer_ipv4"
+    
+    # 验证关键变量
+    if [[ -z "$uuid" || -z "$private_key" || -z "$short_id" ]]; then
+        red "无法读取必要的配置信息，多IP配置失败"
+        yellow "UUID: ${uuid:-未设置}, Private Key: ${private_key:+已设置}${private_key:-未设置}, Short ID: ${short_id:-未设置}"
+        return 1
+    fi
     
     # 生成多 IP JSON
     inbounds_json=$(generate_multi_ip_config "$uuid" "$ym_vl_re" "$private_key" "$short_id" "$ym_vm_ws" "$tlsyn" "$certificatec_vmess_ws" "$certificatep_vmess_ws" "$certificatec_hy2" "$certificatep_hy2" "$certificatec_tuic" "$certificatep_tuic" "$ipv" "$base_port")
+    
+    # 验证生成的JSON格式
+    if [[ -z "$inbounds_json" ]]; then
+        red "多 IP 自动配置生成失败：generate_multi_ip_config 返回空值"
+        return 1
+    fi
     
     # 合并配置
     if echo "$inbounds_json" | jq . >/dev/null 2>&1; then
@@ -4414,8 +4466,17 @@ if [[ ${#detected_ips[@]} -gt 1 ]]; then
             netfilter-persistent save >/dev/null 2>&1
         fi
         restartsb
+        sleep 2
+        # 验证服务是否启动成功
+        if systemctl is-active --quiet sing-box 2>/dev/null || rc-service sing-box status >/dev/null 2>&1; then
+            green "多IP配置已成功应用！"
+        else
+            yellow "服务启动可能有问题，请检查日志：journalctl -u sing-box -n 20"
+        fi
     else
         red "多 IP 自动配置生成失败，保持单 IP模式"
+        yellow "错误详情："
+        echo "$inbounds_json" | jq . 2>&1 | head -20
     fi
 fi
 
