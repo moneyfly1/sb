@@ -300,7 +300,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "vless-sb-ip${ip_index}",
-  "listen": "::",
+  "listen": "${ip}",
   "listen_port": ${port_vl_re},
   "users": [
     {
@@ -327,7 +327,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "vmess-sb-ip${ip_index}",
-  "listen": "::",
+  "listen": "${ip}",
   "listen_port": ${port_vm_ws},
   "users": [
     {
@@ -353,7 +353,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "hy2-sb-ip${ip_index}",
-  "listen": "::",
+  "listen": "${ip}",
   "listen_port": ${port_hy2},
   "users": [
     {
@@ -376,7 +376,7 @@ cat <<EOF
   "sniff": true,
   "sniff_override_destination": true,
   "tag": "tuic5-sb-ip${ip_index}",
-  "listen": "::",
+  "listen": "${ip}",
   "listen_port": ${port_tu},
   "users": [
     {
