@@ -157,15 +157,26 @@ get_ip_interface() {
 }
 
 allocate_ports_for_ip() {
-    local ip_index=$1
-    local base_port=$2
-    local port_offset=$(( (ip_index - 1) * 1000 ))
-    local ports=(
-        $((base_port + port_offset))
-        $((base_port + port_offset + 1))
-        $((base_port + port_offset + 2))
-        $((base_port + port_offset + 3))
-    )
+    # 原有的 ip_index 和 base_port 参数不再使用，实现完全随机
+    local ports=()
+    
+    # 循环生成4个端口（分别对应 vl_re, vm_ws, hy2, tu）
+    while [[ ${#ports[@]} -lt 4 ]]; do
+        # 生成 10000 到 65535 之间的随机端口
+        local port=$(shuf -i 10000-65535 -n 1)
+        
+        # 1. 查重：检查该端口是否已经在当前的 ports 数组中（防止同一个IP生成重复端口）
+        if [[ " ${ports[*]} " =~ " ${port} " ]]; then
+            continue
+        fi
+
+        # 2. 查占用：调用脚本内置的 check_port_available 检查系统端口是否被占用
+        # 虽然 generate_multi_ip_config 后面还会检查一次，但这里先过滤一遍能保证纯随机性
+        if check_port_available "$port"; then
+            ports+=("$port")
+        fi
+    done
+    
     echo "${ports[@]}"
 }
 
