@@ -1548,6 +1548,8 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     done < /etc/s-box/ip_port_mapping.txt
     green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     green "所有节点链接已保存到：/etc/s-box/vl_reality.txt"
+    # 追加到聚合链接
+    cat /etc/s-box/vl_reality.txt >> /etc/s-box/jhdy.txt
 else
     # 单IP模式（原逻辑）
     # 确保所有变量不为空
@@ -1607,6 +1609,8 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
         done < /etc/s-box/ip_port_mapping.txt
         green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         green "所有节点链接已保存到：/etc/s-box/vm_ws.txt"
+        # 追加到聚合链接
+        cat /etc/s-box/vm_ws.txt >> /etc/s-box/jhdy.txt
     else
         red "🚀【 vmess-ws-tls - 多IP节点 】" && sleep 1
         echo
@@ -1632,6 +1636,8 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
         done < /etc/s-box/ip_port_mapping.txt
         green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         green "所有节点链接已保存到：/etc/s-box/vm_ws_tls.txt"
+        # 追加到聚合链接
+        cat /etc/s-box/vm_ws_tls.txt >> /etc/s-box/jhdy.txt
     fi
 else
     # 单IP模式（原逻辑）
@@ -1744,6 +1750,8 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     done < /etc/s-box/ip_port_mapping.txt
     green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     green "所有节点链接已保存到：/etc/s-box/hy2.txt"
+    # 追加到聚合链接
+    cat /etc/s-box/hy2.txt >> /etc/s-box/jhdy.txt
 else
     # 单IP模式（原逻辑）
     # 确保所有变量不为空
@@ -1804,6 +1812,8 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
     done < /etc/s-box/ip_port_mapping.txt
     green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     green "所有节点链接已保存到：/etc/s-box/tuic5.txt"
+    # 追加到聚合链接
+    cat /etc/s-box/tuic5.txt >> /etc/s-box/jhdy.txt
 else
     # 单IP模式（原逻辑）
     # 确保所有变量不为空
@@ -4289,6 +4299,126 @@ curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version | 
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 lnsb && blue "Sing-box-yg脚本安装成功，脚本快捷方式：sb" && cronsb
 echo
+
+# 自动检测多 IP 并配置
+local detected_ips=($(detect_all_ips))
+if [[ ${#detected_ips[@]} -gt 1 ]]; then
+    green "检测到多个 IP 地址 (${#detected_ips[@]} 个)，正在自动配置多 IP 节点..."
+    # 自动执行多 IP 配置逻辑（简化版 multiip，无交互，使用默认基准端口 20000）
+    # 确保依赖变量已就位
+    base_port=20000
+    
+    # 重新读取可能已生成的单 IP 证书路径
+    certificatec_vmess_ws="/etc/s-box/cert_vmess.crt"
+    certificatep_vmess_ws="/etc/s-box/key_vmess.key"
+    certificatec_hy2="/etc/s-box/cert_hy2.crt"
+    certificatep_hy2="/etc/s-box/key_hy2.key"
+    certificatec_tuic="/etc/s-box/cert_tuic.crt"
+    certificatep_tuic="/etc/s-box/key_tuic.key"
+    
+    # 确保自签证书存在
+    gen_self_sign(){
+        local crt=$1 key=$2 cn=$3
+        if [[ ! -f "$crt" ]]; then
+             openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "$key" -out "$crt" -days 36500 -subj "/CN=$cn" 2>/dev/null
+        fi
+    }
+    # 获取单 IP 阶段可能生成的域名
+    ym_vm_ws=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].tls.server_name' 2>/dev/null)
+    [[ -z $ym_vm_ws || $ym_vm_ws == "null" ]] && ym_vm_ws="www.bing.com"
+    
+    gen_self_sign "$certificatec_vmess_ws" "$certificatep_vmess_ws" "$ym_vm_ws"
+    gen_self_sign "$certificatec_hy2" "$certificatep_hy2" "www.bing.com"
+    gen_self_sign "$certificatec_tuic" "$certificatep_tuic" "www.bing.com"
+    
+    # 读取 UUID 等关键信息
+    uuid=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].users[0].uuid')
+    ym_vl_re=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')
+    private_key=$(cat /etc/s-box/private.key 2>/dev/null)
+    short_id=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.reality.short_id[0]')
+    tlsyn=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
+    ipv=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.outbounds[0].domain_strategy')
+    
+    # 生成多 IP JSON
+    inbounds_json=$(generate_multi_ip_config "$uuid" "$ym_vl_re" "$private_key" "$short_id" "$ym_vm_ws" "$tlsyn" "$certificatec_vmess_ws" "$certificatep_vmess_ws" "$certificatec_hy2" "$certificatep_hy2" "$certificatec_tuic" "$certificatep_tuic" "$ipv" "$base_port")
+    
+    # 合并配置
+    if echo "$inbounds_json" | jq . >/dev/null 2>&1; then
+        # 读取原有 outbounds 和 route
+        # 注意：此处我们需要生成多 IP 对应的 outbounds 和路由规则，参考 multiip 函数逻辑
+        # 为简化，我们调用辅助脚本或在下面直接生成
+        
+        # 重新生成 outbounds
+        local outbounds_json="["
+        local ip_index=1
+        for ip in "${detected_ips[@]}"; do
+            [[ $ip_index -gt 1 ]] && outbounds_json+=","
+            outbounds_json+="{ \"type\": \"direct\", \"tag\": \"direct-ip${ip_index}\", \"domain_strategy\": \"$ipv\" }"
+            ((ip_index++))
+        done
+        outbounds_json+=", { \"type\": \"direct\", \"tag\": \"direct\", \"domain_strategy\": \"$ipv\" }]"
+        
+        # 重新生成 route rules
+        local route_rules_json="["
+        ip_index=1
+        for ip in "${detected_ips[@]}"; do
+            [[ $ip_index -gt 1 ]] && route_rules_json+=","
+            route_rules_json+="{ \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic-sb-ip${ip_index}\"], \"outbound\": \"direct-ip${ip_index}\" }"
+            ((ip_index++))
+        done
+        route_rules_json+=", { \"network\": [\"udp\", \"tcp\"], \"outbound\": \"direct\" }]"
+
+        # 写入 sb.json
+        tmpfile=$(mktemp /tmp/sb_config_auto.json)
+        jq -n --argjson ib "$inbounds_json" --argjson ob "$outbounds_json" --argjson rules "$route_rules_json" '{
+            "log": {"disabled": false,"level": "info","timestamp": true},
+            "inbounds": $ib,
+            "outbounds": $ob,
+            "route": {"rules": $rules}
+        } ' > "$tmpfile"
+        mv "$tmpfile" /etc/s-box/sb.json
+        green "多 IP 随机端口配置已自动应用！"
+        
+        # 配置系统路由和防火墙
+        yellow "正在自动配置多 IP 系统路由与防火墙..."
+        
+        # 获取网关
+        default_gw=$(ip route | grep default | awk '{print $3}' | head -1)
+        default_if=$(ip route | grep default | awk '{print $5}' | head -1)
+        [[ -z "$default_if" ]] && default_if=$(ip route | grep default | awk '{print $7}' | head -1)
+        
+        if [[ -n "$default_gw" && -n "$default_if" ]]; then
+            ip_index=1
+            for ip in "${detected_ips[@]}"; do
+                 # 配置路由表
+                 table_id=$((100 + ip_index))
+                 if ! grep -q "^$table_id " /etc/iproute2/rt_tables 2>/dev/null; then
+                    echo "$table_id ip${ip_index}" >> /etc/iproute2/rt_tables
+                 fi
+                 ip rule add from $ip table $table_id 2>/dev/null
+                 ip route add default via $default_gw dev $default_if src $ip table $table_id 2>/dev/null
+                 ip route add $ip dev $default_if table $table_id 2>/dev/null
+                 
+                 # 配置 iptables SNAT 和 端口放行
+                 iptables -t nat -A POSTROUTING -s $ip -j SNAT --to-source $ip 2>/dev/null
+                 
+                 # 放行随机端口（从映射文件读取）
+                 ports=($(head -n $ip_index /etc/s-box/ip_port_mapping.txt | tail -n 1 | cut -d'|' -f2-5))
+                 for p in "${ports[@]}"; do
+                     iptables -I INPUT -p tcp --dport $p -j ACCEPT
+                     iptables -I INPUT -p udp --dport $p -j ACCEPT
+                 done
+                 
+                 ((ip_index++))
+            done
+            netfilter-persistent save >/dev/null 2>&1
+        fi
+        restartsb
+    else
+        red "多 IP 自动配置生成失败，保持单 IP模式"
+    fi
+fi
+
 wgcfgo
 sbshare
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -5602,21 +5732,14 @@ if ! result_vl_vm_hy_tu; then
     return 1
 fi
 
+# 合并所有节点链接
+> /etc/s-box/jhdy.txt
+
 # 生成各协议节点链接（即使某个失败也继续）
 resvless || yellow "警告: Vless节点生成失败"
 resvmess || yellow "警告: Vmess节点生成失败"
 reshy2 || yellow "警告: Hysteria2节点生成失败"
 restu5 || yellow "警告: Tuic节点生成失败"
-
-# 合并所有节点链接
-> /etc/s-box/jhdy.txt
-cat /etc/s-box/vl_reality.txt 2>/dev/null >> /etc/s-box/jhdy.txt
-cat /etc/s-box/vm_ws_argols.txt 2>/dev/null >> /etc/s-box/jhdy.txt
-cat /etc/s-box/vm_ws_argogd.txt 2>/dev/null >> /etc/s-box/jhdy.txt
-cat /etc/s-box/vm_ws.txt 2>/dev/null >> /etc/s-box/jhdy.txt
-cat /etc/s-box/vm_ws_tls.txt 2>/dev/null >> /etc/s-box/jhdy.txt
-cat /etc/s-box/hy2.txt 2>/dev/null >> /etc/s-box/jhdy.txt
-cat /etc/s-box/tuic5.txt 2>/dev/null >> /etc/s-box/jhdy.txt
 
 # 检查是否有节点链接
 if [[ ! -s /etc/s-box/jhdy.txt ]]; then
@@ -5756,14 +5879,24 @@ hy2_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].tls.key_p
 tu5_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].tls.key_path')
 [[ "$tu5_sniname" = '/etc/s-box/private.key' ]] && tu5_zs="自签证书" || tu5_zs="域名证书"
 echo -e "Sing-box节点关键信息、已分流域名情况如下："
-echo -e "🚀【 Vless-reality 】${yellow}端口:$vl_port  Reality域名证书伪装地址：$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')${plain}"
-if [[ "$tls" = "false" ]]; then
-echo -e "🚀【   Vmess-ws    】${yellow}端口:$vm_port   证书形式:$vm_zs   Argo状态:$argoym${plain}"
+if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
+    local ip_count=$(wc -l < /etc/s-box/ip_port_mapping.txt)
+    echo -e "🔥【 多IP部署模式 】检测到 ${green}$ip_count${plain} 个IP已生效"
+    echo -e "🚀【 Vless-reality 】${yellow}端口: [随机]  Reality伪装: $(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')${plain}"
+    echo -e "🚀【   VMess-WS    】${yellow}端口: [随机]  状态: $vm_zs${plain}"
+    echo -e "🚀【  Hysteria-2   】${yellow}端口: [随机]  证书: $hy2_zs${plain}"
+    echo -e "🚀【    Tuic-v5    】${yellow}端口: [随机]  证书: $tu5_zs${plain}"
+    echo -e "💡 TIP: 多IP端口各不相同，请进入选项 9 -> 1 查看完整节点映射"
 else
-echo -e "🚀【 Vmess-ws-tls  】${yellow}端口:$vm_port   证书形式:$vm_zs   Argo状态:$argoym${plain}"
+    echo -e "🚀【 Vless-reality 】${yellow}端口:$vl_port  Reality域名证书伪装地址：$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')${plain}"
+    if [[ "$tls" = "false" ]]; then
+    echo -e "🚀【   Vmess-ws    】${yellow}端口:$vm_port   证书形式:$vm_zs   Argo状态:$argoym${plain}"
+    else
+    echo -e "🚀【 Vmess-ws-tls  】${yellow}端口:$vm_port   证书形式:$vm_zs   Argo状态:$argoym${plain}"
+    fi
+    echo -e "🚀【  Hysteria-2   】${yellow}端口:$hy2_port  证书形式:$hy2_zs  转发多端口: $hy2zfport${plain}"
+    echo -e "🚀【    Tuic-v5    】${yellow}端口:$tu5_port  证书形式:$tu5_zs  转发多端口: $tu5zfport${plain}"
 fi
-echo -e "🚀【  Hysteria-2   】${yellow}端口:$hy2_port  证书形式:$hy2_zs  转发多端口: $hy2zfport${plain}"
-echo -e "🚀【    Tuic-v5    】${yellow}端口:$tu5_port  证书形式:$tu5_zs  转发多端口: $tu5zfport${plain}"
 if [ "$argoym" = "已开启" ]; then
 echo -e "Vmess-UUID：${yellow}$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].users[0].uuid')${plain}"
 echo -e "Vmess-Path：${yellow}$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].transport.path')${plain}"
