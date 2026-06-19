@@ -67,6 +67,114 @@ bbr="Openvz/Lxc"
 fi
 hostname=$(hostname)
 
+is_reality_key() {
+    local key=$1
+    [[ "$key" =~ ^[A-Za-z0-9_-]{40,96}$ ]]
+}
+
+is_pem_certificate() {
+    local crt=$1
+    [[ -s "$crt" ]] || return 1
+    grep -q "BEGIN CERTIFICATE" "$crt" 2>/dev/null || return 1
+    openssl x509 -in "$crt" -noout >/dev/null 2>&1
+}
+
+is_pem_private_key() {
+    local key=$1
+    [[ -s "$key" ]] || return 1
+    grep -q "BEGIN .*PRIVATE KEY" "$key" 2>/dev/null || return 1
+    openssl pkey -in "$key" -noout >/dev/null 2>&1 || \
+    openssl ec -in "$key" -noout >/dev/null 2>&1 || \
+    openssl rsa -in "$key" -noout >/dev/null 2>&1
+}
+
+is_self_signed_tls_key_path() {
+    case "$1" in
+        /etc/s-box/private.key|/etc/s-box/key_vmess.key|/etc/s-box/key_hy2.key|/etc/s-box/key_tuic.key)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+ensure_self_signed_cert() {
+    local crt=$1
+    local key=$2
+    local cn=${3:-www.bing.com}
+
+    if is_pem_certificate "$crt" && is_pem_private_key "$key"; then
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$crt")" "$(dirname "$key")"
+    rm -f "$crt" "$key"
+    if openssl ecparam -genkey -name prime256v1 -out "$key" >/dev/null 2>&1 && \
+       openssl req -new -x509 -days 36500 -key "$key" -out "$crt" -subj "/CN=$cn" >/dev/null 2>&1 && \
+       is_pem_certificate "$crt" && is_pem_private_key "$key"; then
+        return 0
+    fi
+
+    rm -f "$crt" "$key"
+    openssl req -x509 -nodes -newkey rsa:2048 -keyout "$key" -out "$crt" -days 36500 -subj "/CN=$cn" >/dev/null 2>&1 && \
+    is_pem_certificate "$crt" && is_pem_private_key "$key"
+}
+
+repair_tls_keypairs() {
+    [[ -f /etc/s-box/sb.json ]] || return 0
+
+    if ! command -v jq >/dev/null 2>&1; then
+        ensure_self_signed_cert /etc/s-box/cert.pem /etc/s-box/private.key www.bing.com >/dev/null 2>&1
+        return 0
+    fi
+
+    sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '
+        .inbounds[]? |
+        select(.tls.enabled == true and (.tls.certificate_path? != null) and (.tls.key_path? != null)) |
+        [.tls.certificate_path, .tls.key_path, (.tls.server_name // "www.bing.com")] |
+        @tsv
+    ' 2>/dev/null | while IFS=$'\t' read -r crt key cn; do
+        [[ -n "$crt" && -n "$key" && "$crt" != "null" && "$key" != "null" ]] || continue
+        if ! is_pem_certificate "$crt" || ! is_pem_private_key "$key"; then
+            ensure_self_signed_cert "$crt" "$key" "${cn:-www.bing.com}" >/dev/null 2>&1 || true
+        fi
+    done
+
+    ensure_self_signed_cert /etc/s-box/cert.pem /etc/s-box/private.key www.bing.com >/dev/null 2>&1
+}
+
+load_or_create_reality_keypair() {
+    private_key=""
+    public_key=$(cat /etc/s-box/public.key 2>/dev/null | tr -d '\n\r\t ')
+
+    if [[ -f /etc/s-box/sb.json ]]; then
+        private_key=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[]? | select(.type == "vless") | .tls.reality.private_key // empty' 2>/dev/null | head -1 | tr -d '\n\r\t ')
+    fi
+
+    if ! is_reality_key "$private_key" && [[ -f /etc/s-box/reality_private.key ]]; then
+        private_key=$(cat /etc/s-box/reality_private.key 2>/dev/null | tr -d '\n\r\t ')
+    fi
+
+    if is_reality_key "$private_key" && is_reality_key "$public_key"; then
+        echo "$private_key" > /etc/s-box/reality_private.key
+        echo "$public_key" > /etc/s-box/public.key
+        return 0
+    fi
+
+    local key_pair
+    key_pair=$(/etc/s-box/sing-box generate reality-keypair 2>/dev/null) || return 1
+    private_key=$(echo "$key_pair" | awk -F': ' '/PrivateKey/{print $2}' | tr -d '\n\r\t ')
+    public_key=$(echo "$key_pair" | awk -F': ' '/PublicKey/{print $2}' | tr -d '\n\r\t ')
+
+    if ! is_reality_key "$private_key" || ! is_reality_key "$public_key"; then
+        return 1
+    fi
+
+    echo "$private_key" > /etc/s-box/reality_private.key
+    echo "$public_key" > /etc/s-box/public.key
+}
+
 # ================= 多IP工具函数（内置，无需外部脚本） =================
 detect_all_ips() {
     local ips=()
@@ -637,10 +745,9 @@ red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 green "二、生成并设置相关证书"
 echo
 blue "自动生成bing自签证书中……" && sleep 2
-openssl ecparam -genkey -name prime256v1 -out /etc/s-box/private.key
-openssl req -new -x509 -days 36500 -key /etc/s-box/private.key -out /etc/s-box/cert.pem -subj "/CN=www.bing.com"
+ensure_self_signed_cert /etc/s-box/cert.pem /etc/s-box/private.key www.bing.com
 echo
-if [[ -f /etc/s-box/cert.pem ]]; then
+if is_pem_certificate /etc/s-box/cert.pem && is_pem_private_key /etc/s-box/private.key; then
 blue "生成bing自签证书成功"
 else
 red "生成bing自签证书失败" && exit
@@ -1470,7 +1577,7 @@ fi
 ym=$(cat /root/ygkkkca/ca.log 2>/dev/null)
 
 # 设置hysteria2的SNI名称（确保不为空）
-if [[ "$hy2_sniname" = '/etc/s-box/private.key' ]] || [[ "$hy2_sniname" = '/etc/s-box/key_hy2.key' ]] || [[ -z "$hy2_sniname" ]] || [[ "$hy2_sniname" == "null" ]]; then
+if is_self_signed_tls_key_path "$hy2_sniname" || [[ -z "$hy2_sniname" ]] || [[ "$hy2_sniname" == "null" ]]; then
     # 使用自签证书，SNI为www.bing.com
     if [[ -n "$hy2_server_name" && "$hy2_server_name" != "null" && "$hy2_server_name" != "" ]]; then
         hy2_name="$hy2_server_name"
@@ -1500,7 +1607,7 @@ fi
 [[ -z "$hy2_name" || "$hy2_name" == "null" ]] && hy2_name="www.bing.com"
 
 # 设置tuic的SNI名称（确保不为空）
-if [[ "$tu5_sniname" = '/etc/s-box/private.key' ]] || [[ "$tu5_sniname" = '/etc/s-box/key_tuic.key' ]] || [[ -z "$tu5_sniname" ]] || [[ "$tu5_sniname" == "null" ]]; then
+if is_self_signed_tls_key_path "$tu5_sniname" || [[ -z "$tu5_sniname" ]] || [[ "$tu5_sniname" == "null" ]]; then
     # 使用自签证书，SNI为www.bing.com
     if [[ -n "$tu5_server_name" && "$tu5_server_name" != "null" && "$tu5_server_name" != "" ]]; then
         tu5_name="$tu5_server_name"
@@ -1601,7 +1708,8 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
         while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
             # 获取该IP对应的ws_path（从配置文件中读取）
             ws_path_ip="${uuid}-vm-ip${ip_index}"
-            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"vm-ws-IP$ip_index-$ip","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+            vm_ps="vm-ws-IP${ip_index}-${ip}"
+            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"'$vm_ps'","tls":"","type":"none","v":"2"}' | base64 -w 0)"
             echo "$vm_link" >> /etc/s-box/vm_ws.txt
             green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             green "IP #$ip_index: $ip (端口: $port_vm)"
@@ -1621,7 +1729,8 @@ if [[ -f /etc/s-box/ip_port_mapping.txt ]]; then
         local ip_index=1
         while IFS='|' read -r ip port_vl port_vm port_hy2 port_tu; do
             ws_path_ip="${uuid}-vm-ip${ip_index}"
-            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"vm-ws-tls-IP$ip_index-$ip","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+            vm_ps="vm-ws-tls-IP${ip_index}-${ip}"
+            vm_link="vmess://$(echo '{"add":"'$ip'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path_ip'","port":"'$port_vm'","ps":"'$vm_ps'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
             echo "$vm_link" >> /etc/s-box/vm_ws_tls.txt
             green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             green "IP #$ip_index: $ip (端口: $port_vm)"
@@ -1870,6 +1979,7 @@ generate_multi_ip_clash_config(){
         local vm_tag="vmess-IP${ip_index}-${ip}"
         local hy2_tag="hy2-IP${ip_index}-${ip}"
         local tuic_tag="tuic5-IP${ip_index}-${ip}"
+        local vm_ws_path="${uuid}-vm-ip${ip_index}"
         
         select_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
         auto_list+="        \"${vl_tag}\",\n        \"${vm_tag}\",\n        \"${hy2_tag}\",\n        \"${tuic_tag}\",\n"
@@ -1877,14 +1987,14 @@ generate_multi_ip_clash_config(){
         
         # 生成YAML代理配置
         proxies_yaml+="- name: ${vl_tag}\n  type: vless\n  server: ${ip}\n  port: ${port_vl}\n  uuid: ${uuid}\n  network: tcp\n  udp: true\n  tls: true\n  flow: xtls-rprx-vision\n  servername: ${vl_name}\n  reality-opts:\n    public-key: ${public_key}\n    short-id: ${short_id}\n  client-fingerprint: chrome\n\n"
-        proxies_yaml+="- name: ${vm_tag}\n  type: vmess\n  server: ${ip}\n  port: ${port_vm}\n  uuid: ${uuid}\n  alterId: 0\n  cipher: auto\n  udp: true\n  tls: ${tls}\n  network: ws\n  servername: ${vm_name}\n  ws-opts:\n    path: \"${uuid}-vm-ip${ip_index}\"\n    headers:\n      Host: ${vm_name}\n\n"
+        proxies_yaml+="- name: ${vm_tag}\n  type: vmess\n  server: ${ip}\n  port: ${port_vm}\n  uuid: ${uuid}\n  alterId: 0\n  cipher: auto\n  udp: true\n  tls: ${tls}\n  network: ws\n  servername: ${vm_name}\n  ws-opts:\n    path: \"${vm_ws_path}\"\n    headers:\n      Host: ${vm_name}\n\n"
         proxies_yaml+="- name: ${hy2_tag}\n  type: hysteria2\n  server: ${ip}\n  port: ${port_hy2}\n  password: ${uuid}\n  alpn:\n    - h3\n  sni: ${hy2_name}\n  skip-cert-verify: ${hy2_ins}\n  fast-open: true\n\n"
         proxies_yaml+="- name: ${tuic_tag}\n  server: ${ip}\n  port: ${port_tu}\n  type: tuic\n  uuid: ${uuid}\n  password: ${uuid}\n  alpn: [h3]\n  disable-sni: false\n  reduce-rtt: true\n  udp-relay-mode: native\n  congestion-controller: bbr\n  sni: ${tu5_name}\n  skip-cert-verify: ${tu5_ins}\n\n"
         
         # 生成JSON outbounds配置
         [[ $ip_index -gt 1 ]] && outbounds_json+=",\n"
         outbounds_json+="    {\"type\":\"vless\",\"tag\":\"${vl_tag}\",\"server\":\"${ip}\",\"server_port\":${port_vl},\"uuid\":\"${uuid}\",\"flow\":\"xtls-rprx-vision\",\"tls\":{\"enabled\":true,\"server_name\":\"${vl_name}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"},\"reality\":{\"enabled\":true,\"public_key\":\"${public_key}\",\"short_id\":\"${short_id}\"}}},\n"
-        outbounds_json+="    {\"server\":\"${ip}\",\"server_port\":${port_vm},\"tag\":\"${vm_tag}\",\"tls\":{\"enabled\":${tls},\"server_name\":\"${vm_name}\",\"insecure\":false,\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}},\"packet_encoding\":\"packetaddr\",\"transport\":{\"headers\":{\"Host\":[\"${vm_name}\"]},\"path\":\"${ws_path}\",\"type\":\"ws\"},\"type\":\"vmess\",\"security\":\"auto\",\"uuid\":\"${uuid}\"},\n"
+        outbounds_json+="    {\"server\":\"${ip}\",\"server_port\":${port_vm},\"tag\":\"${vm_tag}\",\"tls\":{\"enabled\":${tls},\"server_name\":\"${vm_name}\",\"insecure\":false,\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}},\"packet_encoding\":\"packetaddr\",\"transport\":{\"headers\":{\"Host\":[\"${vm_name}\"]},\"path\":\"${vm_ws_path}\",\"type\":\"ws\"},\"type\":\"vmess\",\"security\":\"auto\",\"uuid\":\"${uuid}\"},\n"
         outbounds_json+="    {\"type\":\"hysteria2\",\"tag\":\"${hy2_tag}\",\"server\":\"${ip}\",\"server_port\":${port_hy2},\"password\":\"${uuid}\",\"tls\":{\"enabled\":true,\"server_name\":\"${hy2_name}\",\"insecure\":${hy2_ins},\"alpn\":[\"h3\"]}},\n"
         outbounds_json+="    {\"type\":\"tuic\",\"tag\":\"${tuic_tag}\",\"server\":\"${ip}\",\"server_port\":${port_tu},\"uuid\":\"${uuid}\",\"password\":\"${uuid}\",\"congestion_control\":\"bbr\",\"udp_relay_mode\":\"native\",\"udp_over_stream\":false,\"zero_rtt_handshake\":false,\"heartbeat\":\"10s\",\"tls\":{\"enabled\":true,\"server_name\":\"${tu5_name}\",\"insecure\":${tu5_ins},\"alpn\":[\"h3\"]}}"
         
@@ -4273,10 +4383,9 @@ insport
 sleep 2
 echo
 blue "Vless-reality相关key与id将自动生成……"
-key_pair=$(/etc/s-box/sing-box generate reality-keypair)
-private_key=$(echo "$key_pair" | awk '/PrivateKey/ {print $2}' | tr -d '"')
-public_key=$(echo "$key_pair" | awk '/PublicKey/ {print $2}' | tr -d '"')
-echo "$public_key" > /etc/s-box/public.key
+if ! load_or_create_reality_keypair; then
+red "Reality密钥生成失败，请检查sing-box内核是否正常" && exit
+fi
 short_id=$(/etc/s-box/sing-box generate rand --hex 4)
 wget -q -O /root/geoip.db https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.db
 wget -q -O /root/geosite.db https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.db
@@ -4305,9 +4414,9 @@ vl_na="正在使用的域名：$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.in
 tls=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
 [[ "$tls" = "false" ]] && vm_na="当前已关闭TLS。$ymzs ${yellow}将开启TLS，Argo隧道将不支持开启${plain}" || vm_na="正在使用的域名证书：$(cat /root/ygkkkca/ca.log 2>/dev/null)。$yellow切换为关闭TLS，Argo隧道将可用$plain"
 hy2_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].tls.key_path')
-[[ "$hy2_sniname" = '/etc/s-box/private.key' ]] && hy2_na="正在使用自签bing证书。$ymzs" || hy2_na="正在使用的域名证书：$(cat /root/ygkkkca/ca.log 2>/dev/null)。$yellow切换为自签bing证书$plain"
+is_self_signed_tls_key_path "$hy2_sniname" && hy2_na="正在使用自签bing证书。$ymzs" || hy2_na="正在使用的域名证书：$(cat /root/ygkkkca/ca.log 2>/dev/null)。$yellow切换为自签bing证书$plain"
 tu5_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].tls.key_path')
-[[ "$tu5_sniname" = '/etc/s-box/private.key' ]] && tu5_na="正在使用自签bing证书。$ymzs" || tu5_na="正在使用的域名证书：$(cat /root/ygkkkca/ca.log 2>/dev/null)。$yellow切换为自签bing证书$plain"
+is_self_signed_tls_key_path "$tu5_sniname" && tu5_na="正在使用自签bing证书。$ymzs" || tu5_na="正在使用的域名证书：$(cat /root/ygkkkca/ca.log 2>/dev/null)。$yellow切换为自签bing证书$plain"
 echo
 green "请选择要切换证书模式的协议"
 green "1：vless-reality协议，$vl_na"
@@ -5435,6 +5544,7 @@ fi
 }
 
 restartsb(){
+repair_tls_keypairs
 if [[ x"${release}" == x"alpine" ]]; then
 rc-service sing-box restart
 else
@@ -5696,7 +5806,7 @@ echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 tu5_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].tls.key_path')
-if [[ "$tu5_sniname" = '/etc/s-box/private.key' ]]; then
+if is_self_signed_tls_key_path "$tu5_sniname"; then
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 red "注意：V2rayN客户端使用自定义Tuic5官方客户端核心时，不支持Tuic5自签证书，仅支持域名证书" && sleep 2
@@ -5754,9 +5864,9 @@ vm_zs="TLS开启"
 argoym="不支持开启"
 fi
 hy2_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].tls.key_path')
-[[ "$hy2_sniname" = '/etc/s-box/private.key' ]] && hy2_zs="自签证书" || hy2_zs="域名证书"
+is_self_signed_tls_key_path "$hy2_sniname" && hy2_zs="自签证书" || hy2_zs="域名证书"
 tu5_sniname=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].tls.key_path')
-[[ "$tu5_sniname" = '/etc/s-box/private.key' ]] && tu5_zs="自签证书" || tu5_zs="域名证书"
+is_self_signed_tls_key_path "$tu5_sniname" && tu5_zs="自签证书" || tu5_zs="域名证书"
 echo -e "Sing-box节点关键信息、已分流域名情况如下："
 echo -e "🚀【 Vless-reality 】${yellow}端口:$vl_port  Reality域名证书伪装地址：$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')${plain}"
 if [[ "$tls" = "false" ]]; then
@@ -6026,40 +6136,7 @@ fi
 ym_vl_re=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[0].tls.server_name' 2>/dev/null)
 [[ -z $ym_vl_re || $ym_vl_re == "null" ]] && ym_vl_re="www.microsoft.com"
 
-if [[ -f /etc/s-box/private.key ]]; then
-# 严格清理私钥：移除所有空白字符和换行符，只保留base64字符
-private_key=$(cat /etc/s-box/private.key | tr -d '\n\r\t ' | grep -oE '^[A-Za-z0-9+/=]+$' | head -n 1)
-# 验证私钥格式（Reality私钥应该是base64编码，长度通常为44或88字符）
-if [[ -z "$private_key" || ${#private_key} -lt 40 ]]; then
-    yellow "检测到私钥格式异常，重新生成..."
-    rm -f /etc/s-box/private.key /etc/s-box/public.key
-    private_key=""
-fi
-fi
-
-if [[ -z "$private_key" ]]; then
-kp=$(/etc/s-box/sing-box generate reality-keypair 2>/dev/null)
-if [[ -n "$kp" ]]; then
-    private_key=$(echo "$kp" | awk -F': ' '/PrivateKey/{print $2}' | tr -d '\n\r\t ')
-    public_key=$(echo "$kp" | awk -F': ' '/PublicKey/{print $2}' | tr -d '\n\r\t ')
-    if [[ -n "$private_key" && ${#private_key} -ge 40 ]]; then
-        echo "$private_key" > /etc/s-box/private.key
-        echo "$public_key" > /etc/s-box/public.key
-    else
-        private_key=""
-    fi
-fi
-fi
-
-# 如果仍然没有有效的私钥，使用openssl生成（但这不是标准的Reality格式，仅作备用）
-if [[ -z "$private_key" ]]; then
-    yellow "使用备用方法生成私钥..."
-    private_key=$(openssl rand -base64 32 | tr -d '\n\r\t ')
-    echo "$private_key" > /etc/s-box/private.key
-fi
-
-# 最终验证：确保私钥不为空且格式正确
-if [[ -z "$private_key" || ${#private_key} -lt 40 ]]; then
+if ! load_or_create_reality_keypair; then
     red "私钥生成失败，请检查sing-box是否正常安装"
     return 1
 fi
@@ -6081,16 +6158,18 @@ certificatep_hy2="$cert_dir/key_hy2.key"
 certificatec_tuic="$cert_dir/cert_tuic.crt"
 certificatep_tuic="$cert_dir/key_tuic.key"
 
-gen_self_sign(){
-local crt=$1 key=$2 cn=$3
-if [[ ! -f "$crt" ]]; then
-openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "$key" -out "$crt" -days 36500 -subj "/CN=$cn" 2>/dev/null || \
-openssl req -x509 -nodes -newkey rsa:2048 -keyout "$key" -out "$crt" -days 36500 -subj "/CN=$cn" 2>/dev/null
+if ! ensure_self_signed_cert "$certificatec_vmess_ws" "$certificatep_vmess_ws" "$ym_vm_ws"; then
+    red "Vmess-ws自签证书生成失败"
+    return 1
 fi
-}
-gen_self_sign "$certificatec_vmess_ws" "$certificatep_vmess_ws" "$ym_vm_ws"
-gen_self_sign "$certificatec_hy2" "$certificatep_hy2" "www.bing.com"
-gen_self_sign "$certificatec_tuic" "$certificatep_tuic" "www.bing.com"
+if ! ensure_self_signed_cert "$certificatec_hy2" "$certificatep_hy2" "www.bing.com"; then
+    red "Hysteria2自签证书生成失败"
+    return 1
+fi
+if ! ensure_self_signed_cert "$certificatec_tuic" "$certificatep_tuic" "www.bing.com"; then
+    red "Tuic5自签证书生成失败"
+    return 1
+fi
 
 # 出站策略
 ipv=$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.outbounds[0].domain_strategy' 2>/dev/null)
@@ -6258,19 +6337,16 @@ fi
 green "网络路由配置完成"
 
 # 为每个IP生成独立的outbound配置
-# 注意：sing-box的direct outbound不支持直接绑定IP，需要通过系统路由实现
-# 我们已经在上面配置了iptables SNAT和ip route，确保每个IP的流量从对应IP出站
 yellow "正在生成多IP出站配置..."
 local outbounds_json="["
 ip_index=1
 for ip in "${ips[@]}"; do
     [[ $ip_index -gt 1 ]] && outbounds_json+=","
-    # 为每个IP创建独立的direct outbound标签
-    # 系统路由和iptables SNAT已确保从该IP发出的流量使用正确的源IP
     outbounds_json+="{
       \"type\": \"direct\",
       \"tag\": \"direct-ip${ip_index}\",
-      \"domain_strategy\": \"$ipv\"
+      \"domain_strategy\": \"$ipv\",
+      \"inet4_bind_address\": \"$ip\"
     }"
     ((ip_index++))
 done
@@ -6290,7 +6366,7 @@ for ip in "${ips[@]}"; do
     [[ $ip_index -gt 1 ]] && route_rules_json+=","
     # 为每个IP的inbound创建路由规则，使用inbound的tag匹配
     route_rules_json+="{
-      \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic-sb-ip${ip_index}\"],
+      \"inbound\": [\"vless-sb-ip${ip_index}\", \"vmess-sb-ip${ip_index}\", \"hy2-sb-ip${ip_index}\", \"tuic5-sb-ip${ip_index}\"],
       \"outbound\": \"direct-ip${ip_index}\"
     }"
     ((ip_index++))
@@ -6604,4 +6680,3 @@ case "$Input" in
 16 ) sbsm;;
  * ) exit 
 esac
-
