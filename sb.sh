@@ -72,6 +72,21 @@ is_reality_key() {
     [[ "$key" =~ ^[A-Za-z0-9_-]{40,96}$ ]]
 }
 
+is_base64_key() {
+    local key=$1
+    [[ "$key" =~ ^[A-Za-z0-9+/]{40,48}={0,2}$ ]]
+}
+
+is_ipv6_address() {
+    local ip=$1
+    [[ "$ip" == *:* && "$ip" =~ ^[0-9A-Fa-f:]+$ ]]
+}
+
+is_wireguard_reserved() {
+    local reserved=$1
+    [[ "$reserved" =~ ^\[[[:space:]]*[0-9]+[[:space:]]*,[[:space:]]*[0-9]+[[:space:]]*,[[:space:]]*[0-9]+[[:space:]]*\]$ ]]
+}
+
 is_pem_certificate() {
     local crt=$1
     [[ -s "$crt" ]] || return 1
@@ -173,6 +188,50 @@ load_or_create_reality_keypair() {
 
     echo "$private_key" > /etc/s-box/reality_private.key
     echo "$public_key" > /etc/s-box/public.key
+}
+
+singbox_check() {
+    local conf=${1:-/etc/s-box/sb.json}
+    ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true /etc/s-box/sing-box check -c "$conf"
+}
+
+validate_singbox_config() {
+    local conf=${1:-/etc/s-box/sb.json}
+    local check_log=/tmp/sing-box-check.log
+
+    [[ -f "$conf" ]] || return 0
+    [[ -x /etc/s-box/sing-box ]] || return 0
+
+    repair_tls_keypairs
+    if singbox_check "$conf" >"$check_log" 2>&1; then
+        return 0
+    fi
+
+    red "Sing-box配置检测失败，服务未启动。错误如下："
+    sed -n '1,40p' "$check_log"
+    yellow "配置文件：$conf"
+    return 1
+}
+
+ensure_singbox_service_env() {
+    if [[ x"${release}" == x"alpine" ]]; then
+        local service_file=/etc/init.d/sing-box
+        [[ -f "$service_file" ]] || return 0
+        grep -q '^export ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true' "$service_file" 2>/dev/null && return 0
+        sed -i '/^command_args=/a export ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true' "$service_file" 2>/dev/null || true
+        chmod +x "$service_file" 2>/dev/null || true
+        return 0
+    fi
+
+    local service_file=/etc/systemd/system/sing-box.service
+    [[ -f "$service_file" ]] || return 0
+    grep -q '^Environment=ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true' "$service_file" 2>/dev/null && return 0
+    if grep -q '^WorkingDirectory=' "$service_file" 2>/dev/null; then
+        sed -i '/^WorkingDirectory=/a Environment=ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true' "$service_file" 2>/dev/null || true
+    else
+        sed -i '/^\[Service\]/a Environment=ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true' "$service_file" 2>/dev/null || true
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
 # ================= 多IP工具函数（内置，无需外部脚本） =================
@@ -395,8 +454,6 @@ generate_multi_ip_config() {
 cat <<EOF
 {
   "type": "vless",
-  "sniff": true,
-  "sniff_override_destination": true,
   "tag": "vless-sb-ip${ip_index}",
   "listen": "${ip}",
   "listen_port": ${port_vl_re},
@@ -422,8 +479,6 @@ cat <<EOF
 },
 {
   "type": "vmess",
-  "sniff": true,
-  "sniff_override_destination": true,
   "tag": "vmess-sb-ip${ip_index}",
   "listen": "${ip}",
   "listen_port": ${port_vm_ws},
@@ -448,8 +503,6 @@ cat <<EOF
 },
 {
   "type": "hysteria2",
-  "sniff": true,
-  "sniff_override_destination": true,
   "tag": "hy2-sb-ip${ip_index}",
   "listen": "${ip}",
   "listen_port": ${port_hy2},
@@ -471,8 +524,6 @@ cat <<EOF
 },
 {
   "type": "tuic",
-  "sniff": true,
-  "sniff_override_destination": true,
   "tag": "tuic5-sb-ip${ip_index}",
   "listen": "${ip}",
   "listen_port": ${port_tu},
@@ -1114,7 +1165,10 @@ cat > /etc/s-box/sb10.json <<EOF
 },
 {
 "outbound": "direct",
-"network": "udp,tcp"
+"network": [
+"udp",
+"tcp"
+]
 }
 ]
 }
@@ -1320,7 +1374,10 @@ cat > /etc/s-box/sb11.json <<EOF
 },
 {
 "outbound": "direct",
-"network": "udp,tcp"
+"network": [
+"udp",
+"tcp"
+]
 }
 ]
 }
@@ -1329,6 +1386,7 @@ EOF
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' | cut -d '.' -f 1,2)
 [[ "$sbnh" == "1.10" ]] && num=10 || num=11
 cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
+validate_singbox_config /etc/s-box/sb.json || exit
 }
 
 sbservice(){
@@ -1337,10 +1395,12 @@ echo '#!/sbin/openrc-run
 description="sing-box service"
 command="/etc/s-box/sing-box"
 command_args="run -c /etc/s-box/sb.json"
+export ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true
 command_background=true
 pidfile="/var/run/sing-box.pid"' > /etc/init.d/sing-box
 chmod +x /etc/init.d/sing-box
 rc-update add sing-box default
+validate_singbox_config /etc/s-box/sb.json || exit
 rc-service sing-box start
 else
 cat > /etc/systemd/system/sing-box.service <<EOF
@@ -1349,6 +1409,7 @@ After=network.target nss-lookup.target
 [Service]
 User=root
 WorkingDirectory=/root
+Environment=ENABLE_DEPRECATED_LEGACY_DOMAIN_STRATEGY_OPTIONS=true
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=/etc/s-box/sing-box run -c /etc/s-box/sb.json
@@ -1361,8 +1422,9 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable sing-box >/dev/null 2>&1
+validate_singbox_config /etc/s-box/sb.json || exit
+systemctl stop sing-box >/dev/null 2>&1
 systemctl start sing-box
-systemctl restart sing-box
 fi
 }
 
@@ -1790,7 +1852,8 @@ else
         fi
         
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+        vm_ps="vm-ws-${vmadd_are_local}"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'$vm_ps'","tls":"","type":"none","v":"2"}' | base64 -w 0)"
         echo -e "${yellow}${vm_link}${plain}"
         echo "$vm_link" > /etc/s-box/vm_ws.txt
         echo
@@ -1814,7 +1877,8 @@ else
         fi
         
         echo "分享链接【v2rayn、v2rayng、nekobox、小火箭shadowrocket】"
-        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+        vm_ps="vm-ws-tls-${vmadd_are_local}"
+        vm_link="vmess://$(echo '{"add":"'$vmadd_are_local'","aid":"0","host":"'$vm_name'","id":"'$uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'$vm_ps'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
         echo -e "${yellow}${vm_link}${plain}"
         echo "$vm_link" > /etc/s-box/vm_ws_tls.txt
         echo
@@ -4372,7 +4436,15 @@ fi
 
 instsllsingbox(){
 if [[ -f '/etc/systemd/system/sing-box.service' ]]; then
-red "已安装Sing-box服务，无法再次安装" && exit
+yellow "已检测到Sing-box服务，先尝试修复现有安装并重启"
+repair_tls_keypairs
+ensure_singbox_service_env
+if [[ -f /etc/s-box/sb.json ]] && validate_singbox_config /etc/s-box/sb.json && restartsb; then
+    sbactive
+    green "现有Sing-box服务已修复并重启"
+    exit
+fi
+red "现有Sing-box服务修复失败，请选择2卸载后再选择1重新安装" && exit
 fi
 mkdir -p /etc/s-box
 v6
@@ -5057,21 +5129,22 @@ echo
 warpwg(){
 warpcode(){
 reg(){
+local keypair warp_private_key warp_public_key response
 keypair=$(openssl genpkey -algorithm X25519 | openssl pkey -text -noout)
-private_key=$(echo "$keypair" | awk '/priv:/{flag=1; next} /pub:/{flag=0} flag' | tr -d '[:space:]' | xxd -r -p | base64)
-public_key=$(echo "$keypair" | awk '/pub:/{flag=1} flag' | tr -d '[:space:]' | xxd -r -p | base64)
+warp_private_key=$(echo "$keypair" | awk '/priv:/{flag=1; next} /pub:/{flag=0} flag' | tr -d '[:space:]' | xxd -r -p | base64)
+warp_public_key=$(echo "$keypair" | awk '/pub:/{flag=1} flag' | tr -d '[:space:]' | xxd -r -p | base64)
 response=$(curl -sL --tlsv1.3 --connect-timeout 3 --max-time 5 \
 -X POST 'https://api.cloudflareclient.com/v0a2158/reg' \
 -H 'CF-Client-Version: a-7.21-0721' \
 -H 'Content-Type: application/json' \
 -d '{
-"key": "'"$public_key"'",
+"key": "'"$warp_public_key"'",
 "tos": "'"$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"'"
 }')
 if [ -z "$response" ]; then
 return 1
 fi
-echo "$response" | python3 -m json.tool 2>/dev/null | sed "/\"account_type\"/i\         \"private_key\": \"$private_key\","
+echo "$response" | python3 -m json.tool 2>/dev/null | sed "/\"account_type\"/i\         \"private_key\": \"$warp_private_key\","
 }
 reserved(){
 reserved_str=$(echo "$warp_info" | grep 'client_id' | cut -d\" -f4)
@@ -5091,14 +5164,16 @@ warp_reserved=$(reserved)
 result
 }
 output=$(warpcode)
-if ! echo "$output" 2>/dev/null | grep -w "private_key" > /dev/null; then
+if echo "$output" 2>/dev/null | grep -w "private_key" > /dev/null; then
+pvk=$(echo "$output" | sed -n 4p | awk '{print $2}' | tr -d ' "' | sed 's/,$//')
+v6=$(echo "$output" | sed -n 7p | awk '{print $2}' | tr -d ' ",' )
+res=$(echo "$output" | sed -n 1p | awk -F":" '{print $NF}' | tr -d ' ' | sed 's/.$//')
+fi
+if ! is_base64_key "$pvk" || ! is_ipv6_address "$v6" || ! is_wireguard_reserved "$res"; then
 v6=2606:4700:110:860e:738f:b37:f15:d38d
 pvk=g9I2sgUH6OCbIBTehkEfVEnuvInHYZvPOFhWchMLSc4=
 res=[33,217,129]
-else
-pvk=$(echo "$output" | sed -n 4p | awk '{print $2}' | tr -d ' "' | sed 's/.$//')
-v6=$(echo "$output" | sed -n 7p | awk '{print $2}' | tr -d ' "')
-res=$(echo "$output" | sed -n 1p | awk -F":" '{print $NF}' | tr -d ' ' | sed 's/.$//')
+yellow "WARP账户返回值不完整，已使用默认备用WARP参数"
 fi
 blue "Private_key私钥：$pvk"
 blue "IPV6地址：$v6"
@@ -5545,6 +5620,8 @@ fi
 
 restartsb(){
 repair_tls_keypairs
+ensure_singbox_service_env
+validate_singbox_config /etc/s-box/sb.json || return 1
 if [[ x"${release}" == x"alpine" ]]; then
 rc-service sing-box restart
 else
@@ -5702,6 +5779,20 @@ fi
 sbactive(){
 if [[ ! -f /etc/s-box/sb.json ]]; then
 red "未正常启动Sing-box，请卸载重装或者选择10查看运行日志反馈" && exit
+fi
+if [[ x"${release}" == x"alpine" ]]; then
+    if ! rc-service sing-box status >/dev/null 2>&1; then
+        red "Sing-box服务未运行，状态如下："
+        rc-service sing-box status 2>&1 | sed -n '1,20p'
+        exit
+    fi
+else
+    if ! systemctl is-active --quiet sing-box; then
+        red "Sing-box服务未运行，状态如下："
+        validate_singbox_config /etc/s-box/sb.json || true
+        systemctl status sing-box --no-pager -l 2>&1 | sed -n '1,25p'
+        exit
+    fi
 fi
 }
 
@@ -6420,10 +6511,10 @@ fi
 
 # 验证配置文件是否可以被sing-box解析
 if [[ -f /etc/s-box/sing-box ]]; then
-    if ! /etc/s-box/sing-box check -c "$tmpfile" >/dev/null 2>&1; then
+    if ! singbox_check "$tmpfile" >/dev/null 2>&1; then
         red "配置文件验证失败，sing-box无法解析此配置"
         yellow "错误详情："
-        /etc/s-box/sing-box check -c "$tmpfile" 2>&1 | head -20
+        singbox_check "$tmpfile" 2>&1 | head -20
         rm -f "$tmpfile"
         return 1
     fi
@@ -6659,7 +6750,7 @@ showprotocol
 fi
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
-readp "请输入数字【0-16】:" Input
+readp "请输入数字【0-17】:" Input
 case "$Input" in  
  1 ) instsllsingbox;;
  2 ) unins;;
